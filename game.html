@@ -99,6 +99,9 @@
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
+.photo-check.is-pending { background: #6b6b6b; animation: pulse 1.2s ease-in-out infinite; }
+.photo-check.is-local { background: #E0A800; color: #1A1010; }
+@keyframes pulse { 50% { opacity: 0.45; } }
 
 /* ── Win Banner ── */
 .win-banner {
@@ -163,6 +166,14 @@
   padding: 14px 0 2px; font-size: 0.85rem; color: var(--muted);
 }
 .sheet-busy .spinner { width: 22px; height: 22px; border-width: 3px; }
+.camera-toggle { display: flex; gap: 6px; margin-top: 12px; }
+.camera-toggle button {
+  flex: 1; padding: 8px 6px; border-radius: 99px; cursor: pointer;
+  border: 1.5px solid var(--border); background: #fff; color: var(--muted);
+  font-family: 'DM Sans', sans-serif; font-size: 0.75rem; font-weight: 500;
+  touch-action: manipulation;
+}
+.camera-toggle button.active { border-color: var(--orange); background: var(--orange-lt); color: var(--orange-dk); font-weight: 700; }
 
 /* ── Photo viewer ── */
 .viewer {
@@ -190,6 +201,12 @@
 .viewer-caption { padding: 14px 18px 2px; text-align: center; max-width: 480px; width: 100%; margin: 0 auto; }
 .viewer-phrase { font-size: 0.85rem; font-style: italic; opacity: 0.75; line-height: 1.4; }
 .viewer-name { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 1.15rem; color: #FFB48F; margin-top: 4px; }
+.viewer-status { font-size: 0.75rem; color: rgba(255,255,255,0.65); margin-top: 8px; line-height: 1.4; }
+.viewer-status.warn { color: #FFD666; }
+.viewer-status button {
+  background: none; border: none; padding: 0; margin-left: 4px; cursor: pointer;
+  color: #fff; font: inherit; font-weight: 700; text-decoration: underline;
+}
 .viewer-actions {
   display: flex; gap: 10px; width: 100%; max-width: 480px; margin: 0 auto;
   padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
@@ -244,6 +261,10 @@
       <span class="char-count" id="charCount">0/15</span>
     </div>
     <p class="photo-hint" id="photoHint">📷 Take a photo of your match to check this square.</p>
+    <div class="camera-toggle" id="cameraToggle" role="group" aria-label="Which camera opens">
+      <button type="button" data-cam="environment">📷 Back camera</button>
+      <button type="button" data-cam="user">🤳 Front camera</button>
+    </div>
     <div class="sheet-busy" id="sheetBusy"><div class="spinner"></div>Preparing photo…</div>
     <div class="sheet-actions" id="captureActions">
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
@@ -271,6 +292,7 @@
   <div class="viewer-caption">
     <div class="viewer-phrase" id="viewerPhrase"></div>
     <div class="viewer-name" id="viewerName"></div>
+    <div class="viewer-status" id="viewerStatus"></div>
   </div>
   <div class="viewer-actions">
     <button class="viewer-btn viewer-remove" onclick="removeCheckFromViewer()">Remove check</button>
@@ -515,7 +537,8 @@ async function reshuffleBoard() {
   const n = checkedCount();
   if (n > 0 && !(await askConfirm(
     'Reshuffle your board?',
-    `You'll get a new layout. Your ${n} checked square${n === 1 ? '' : 's'} and ${n === 1 ? 'its photo' : 'their photos'} on this phone will be deleted.`,
+    `You'll get a new layout. Your ${n} checked square${n === 1 ? '' : 's'} and ${n === 1 ? 'its photo' : 'their photos'} on this phone will be deleted.` +
+      (anyPhotoInDrive() ? " Photos already sent to your host's Google Drive stay there." : ''),
     'Reshuffle'))) return;
   const oldKey = boardKey;
   await PhotoStore.deleteBoard(oldKey + '|');
@@ -557,6 +580,7 @@ function renderGrid() {
     let stampContent;
     if (thumb) {
       stampContent = `<span class="photo-check">✓</span>` + (note ? `<span class="photo-name">${escHtml(note)}</span>` : '');
+      // badge style for upload status is applied by updatePhotoStatus() below
     } else {
       stampContent = note
         ? `<span class="stamp-name">${escHtml(note)}</span>`
@@ -566,6 +590,7 @@ function renderGrid() {
     if (!isFree) cell.addEventListener('click', () => marks[i] ? openViewer(i) : openCapture(i, 'new'));
     grid.appendChild(cell);
   });
+  Object.keys(thumbUrls).forEach(i => { if (marks[i]) updatePhotoStatus(Number(i)); });
   requestAnimationFrame(() => requestAnimationFrame(fitCellText));
 }
 
@@ -574,8 +599,12 @@ function escHtml(s) {
 }
 
 // ── Photo processing ──
-// Decodes the camera image (respecting EXIF rotation) and re-encodes two JPEGs:
-// a viewer copy and a small grid thumbnail. Both are kept on this phone only.
+// Decodes the camera image (respecting EXIF rotation) and re-encodes JPEGs:
+//  - full:  ≤ 4032 × 3024, sent to the host's Google Drive (only in a real session;
+//           kept on the phone just until it's uploaded)
+//  - view:  ≤ 1600px, for the photo viewer on this phone
+//  - thumb: ≤ 360px, for the grid square
+const UPLOAD_MAX_LONG = 4032, UPLOAD_MAX_SHORT = 3024; // must match upload-photo's limits
 const VIEW_MAX_EDGE = 1600;
 const THUMB_MAX_EDGE = 360;
 
@@ -594,9 +623,9 @@ async function decodeImage(file) {
   }
 }
 
-function encodeJpeg(src, maxEdge, quality) {
+function encodeJpeg(src, maxLong, quality, maxShort = maxLong) {
   const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
-  const scale = Math.min(1, maxEdge / Math.max(w, h));
+  const scale = Math.min(1, maxLong / Math.max(w, h), maxShort / Math.min(w, h));
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(w * scale));
   c.height = Math.max(1, Math.round(h * scale));
@@ -612,9 +641,10 @@ function encodeJpeg(src, maxEdge, quality) {
 async function preparePhoto(file) {
   const src = await decodeImage(file);
   try {
+    const full = uploadsEnabled ? await encodeJpeg(src, UPLOAD_MAX_LONG, 0.85, UPLOAD_MAX_SHORT) : null;
     const view = await encodeJpeg(src, VIEW_MAX_EDGE, 0.82);
     const thumb = await encodeJpeg(src, THUMB_MAX_EDGE, 0.7);
-    return { view, thumb };
+    return { full, view, thumb };
   } finally {
     if (src.close) src.close();
   }
@@ -633,6 +663,7 @@ function showSheetStep(step) { // 'capture' | 'busy' | 'preview'
   document.getElementById('photoPreview').style.display = step === 'preview' ? 'block' : 'none';
   document.getElementById('photoHint').style.display = step === 'capture' ? 'block' : 'none';
   document.getElementById('sheetBusy').style.display = step === 'busy' ? 'flex' : 'none';
+  document.getElementById('cameraToggle').style.display = step === 'busy' ? 'none' : 'flex';
   document.getElementById('captureActions').style.display = step === 'capture' ? 'flex' : 'none';
   document.getElementById('previewActions').style.display = step === 'preview' ? 'flex' : 'none';
 }
@@ -658,6 +689,23 @@ function closeSheet() {
 function handleOverlayClick(e) {
   if (e.target === document.getElementById('overlay')) closeSheet();
 }
+
+// Which camera the phone opens first: 'environment' (back) or 'user' (front). The page
+// can't switch cameras once the phone's camera app is open (that app has its own flip
+// button) — this just picks the starting camera, and is remembered on this phone.
+const CAMERA_PREF_KEY = 'bingo-photo:camera';
+function setCamera(facing) {
+  if (facing !== 'user') facing = 'environment';
+  document.getElementById('cameraInput').setAttribute('capture', facing);
+  document.querySelectorAll('#cameraToggle button').forEach(b => {
+    const on = b.dataset.cam === facing;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  try { localStorage.setItem(CAMERA_PREF_KEY, facing); } catch (e) {}
+}
+document.querySelectorAll('#cameraToggle button').forEach(b => b.addEventListener('click', () => setCamera(b.dataset.cam)));
+setCamera((() => { try { return localStorage.getItem(CAMERA_PREF_KEY); } catch (e) { return null; } })());
 
 // Must run straight from a tap — browsers only open the camera on a user gesture.
 function takePhoto() {
@@ -690,7 +738,13 @@ async function usePhoto() {
   document.getElementById('usePhotoBtn').disabled = true;
   const i = activeCell;
   const name = document.getElementById('noteInput').value.slice(0, 15);
-  const rec = { phrase: shuffled[i], name, view: pendingPhoto.view, thumb: pendingPhoto.thumb, takenAt: Date.now() };
+  const rec = {
+    phrase: shuffled[i], name, view: pendingPhoto.view, thumb: pendingPhoto.thumb, takenAt: Date.now(),
+    upload: pendingPhoto.full,                          // full-size JPEG waiting to go to Drive
+    uploadState: pendingPhoto.full ? 'pending' : 'local',
+    uploadError: null,
+    driveFileId: photoRecs[i]?.driveFileId || null,     // a retake replaces the same Drive file
+  };
   await PhotoStore.put(photoKey(i), rec);
   setPhoto(i, rec);
   marks[i] = true;
@@ -699,7 +753,126 @@ async function usePhoto() {
   closeSheet();
   renderGrid(); updateCount(); checkWin();
   if (viewerCell === i) refreshViewer();
-  // Drive upload (build step 3) will be queued here.
+  processUploads();
+}
+
+// ── Upload queue: sends each photo to the host's Google Drive via upload-photo ──
+// Runs one upload at a time. Network errors / busy server → keep the photo queued and
+// retry with backoff (and when the phone comes back online). Host's Drive not connected
+// → the photo stays on this phone, marked so the player can retry later.
+let uploadsEnabled = false; // true only once a real session has loaded (set in loadPhrases)
+let sessionId = null;
+let uploadRunning = false;
+let retryTimer = null;
+let retryDelay = 5000;
+let warnedNotConnected = false;
+
+async function uploadOne(i, rec) {
+  const fd = new FormData();
+  fd.append('session_id', sessionId);
+  fd.append('cell_index', String(i));
+  fd.append('phrase', rec.phrase);
+  fd.append('name', rec.name || '');
+  if (rec.driveFileId) fd.append('file_id', rec.driveFileId);
+  fd.append('photo', rec.upload, 'photo.jpg');
+  try {
+    const res = await fetch(SUPABASE_URL + '/functions/v1/upload-photo', {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY },
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.file_id) return { ok: true, fileId: data.file_id };
+    if (res.status === 429 || res.status >= 500) return { retry: true };
+    return { code: data.code || 'http_' + res.status };
+  } catch (e) {
+    return { retry: true }; // offline / network dropped
+  }
+}
+
+async function processUploads() {
+  if (!uploadsEnabled || uploadRunning) return;
+  uploadRunning = true;
+  clearTimeout(retryTimer);
+  const startKey = boardKey;
+  let waitingToRetry = false;
+  try {
+    for (const idx of Object.keys(photoRecs)) {
+      const i = Number(idx);
+      const rec = photoRecs[i];
+      if (!rec || rec.uploadState !== 'pending' || !rec.upload) continue;
+      const result = await uploadOne(i, rec);
+      if (boardKey !== startKey) return; // board was reshuffled meanwhile
+      const current = photoRecs[i];
+      if (current !== rec) {
+        // Retaken or removed while uploading. Make a queued retake replace the file we
+        // just created, rather than adding a second one.
+        if (current && result.ok && !current.driveFileId) {
+          current.driveFileId = result.fileId;
+          await PhotoStore.put(photoKey(i), current);
+        }
+        continue;
+      }
+      if (result.retry) { scheduleRetry(); waitingToRetry = true; break; }
+      if (result.ok) {
+        Object.assign(rec, { uploadState: 'done', driveFileId: result.fileId, upload: null, uploadError: null });
+        retryDelay = 5000;
+      } else {
+        Object.assign(rec, { uploadState: 'local', uploadError: result.code }); // keep the file for a retry
+        if (!warnedNotConnected && (result.code === 'host_not_connected' || result.code === 'drive_disconnected')) {
+          warnedNotConnected = true;
+          showToast("Your host's Google Drive isn't connected — photos are saved on this phone for now.");
+        }
+      }
+      await PhotoStore.put(photoKey(i), rec);
+      updatePhotoStatus(i);
+    }
+  } finally {
+    uploadRunning = false;
+  }
+  // Photos taken or retaken while this pass was running may have been skipped.
+  const stillPending = Object.values(photoRecs).some(r => r.uploadState === 'pending' && r.upload);
+  if (!waitingToRetry && stillPending && boardKey === startKey) setTimeout(processUploads, 0);
+}
+
+function scheduleRetry() {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(processUploads, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 120000);
+}
+
+window.addEventListener('online', () => { retryDelay = 5000; processUploads(); });
+
+function retryUpload(i) {
+  const rec = photoRecs[i];
+  if (!rec || !rec.upload) return;
+  rec.uploadState = 'pending';
+  rec.uploadError = null;
+  PhotoStore.put(photoKey(i), rec);
+  updatePhotoStatus(i);
+  retryDelay = 5000;
+  processUploads();
+}
+
+// 'pending' | 'done' | 'local' (kept on phone: guest game, or upload refused)
+function photoStatus(i) {
+  const rec = photoRecs[i];
+  return rec ? (rec.uploadState || 'local') : null;
+}
+
+// Refresh one square's badge (and the viewer, if open on it) without re-rendering the grid.
+function updatePhotoStatus(i) {
+  const badge = document.querySelectorAll('.cell')[i]?.querySelector('.photo-check');
+  if (badge) {
+    const s = photoStatus(i);
+    badge.className = 'photo-check' + (s === 'pending' ? ' is-pending' : s === 'local' && uploadsEnabled ? ' is-local' : '');
+    badge.textContent = s === 'pending' ? '↑' : s === 'local' && uploadsEnabled ? '!' : '✓';
+  }
+  if (viewerCell === i) renderViewerStatus();
+}
+
+function anyPhotoInDrive() {
+  return Object.values(photoRecs).some(r => r.uploadState === 'done');
 }
 
 // ── Photo viewer ──
@@ -731,6 +904,37 @@ function refreshViewer() {
   document.getElementById('viewerMissing').style.display = rec ? 'none' : 'block';
   document.getElementById('viewerPhrase').textContent = shuffled[i] || '';
   document.getElementById('viewerName').textContent = notes[i] || '';
+  renderViewerStatus();
+}
+
+function renderViewerStatus() {
+  const el = document.getElementById('viewerStatus');
+  const i = viewerCell;
+  const rec = photoRecs[i];
+  el.className = 'viewer-status';
+  el.textContent = '';
+  if (!rec) return;
+  const s = photoStatus(i);
+  if (s === 'pending') {
+    el.textContent = "⏳ Sending to your host's Google Drive…";
+  } else if (s === 'done') {
+    el.textContent = "✓ Saved to your host's Google Drive";
+  } else if (!uploadsEnabled) {
+    el.textContent = 'Saved on this phone only.';
+  } else {
+    el.classList.add('warn');
+    const reason = rec.uploadError === 'host_not_connected' || rec.uploadError === 'drive_disconnected'
+      ? "your host's Google Drive isn't connected."
+      : "it couldn't be sent to your host's Drive.";
+    el.textContent = 'Saved on this phone only — ' + reason;
+    if (rec.upload) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Try again';
+      btn.onclick = () => retryUpload(i);
+      el.appendChild(btn);
+    }
+  }
 }
 
 function closeViewer(fromPopState) {
@@ -755,8 +959,11 @@ function retakeFromViewer() {
 async function removeCheckFromViewer() {
   const i = viewerCell;
   if (i === null) return;
+  const inDrive = photoRecs[i]?.uploadState === 'done';
   if (!(await askConfirm('Remove this check?',
-    'The square will be unchecked and its photo deleted from this phone.', 'Remove'))) return;
+    'The square will be unchecked and its photo deleted from this phone.' +
+      (inDrive ? " The copy already sent to your host's Google Drive stays there." : ''),
+    'Remove'))) return;
   await PhotoStore.delete(photoKey(i));
   dropPhoto(i);
   marks[i] = false;
@@ -817,7 +1024,8 @@ async function resetMarks() {
   if (n === 0) return;
   if (!(await askConfirm(
     'Clear your board?',
-    `This unchecks all ${n} square${n === 1 ? '' : 's'} and deletes ${n === 1 ? 'its photo' : 'their photos'} from this phone.`,
+    `This unchecks all ${n} square${n === 1 ? '' : 's'} and deletes ${n === 1 ? 'its photo' : 'their photos'} from this phone.` +
+      (anyPhotoInDrive() ? " Photos already sent to your host's Google Drive stay there." : ''),
     'Clear'))) return;
   await PhotoStore.deleteBoard(boardKey + '|');
   clearAllPhotos();
@@ -906,9 +1114,9 @@ function showFatalError(msg) {
 
 async function loadPhrases() {
   const params = new URLSearchParams(window.location.search);
-  const sessionId = params.get('session');
+  const sessionIdParam = params.get('session');
   const isGuestLink = params.get('guest') === '1';
-  if (!sessionId) {
+  if (!sessionIdParam) {
     if (!isGuestLink) {
       showFatalError('No session specified — ask your host for the game link or QR code. Showing a default board for now.');
     }
@@ -918,12 +1126,15 @@ async function loadPhrases() {
     // Looks up the session's host and their phrases in one call, via a database
     // function rather than reading the sessions/user_phrases tables directly —
     // see supabase/sql/tighten-anonymous-access.sql for why.
-    const { data, error } = await sb.rpc('get_session_phrases', { p_session_id: sessionId });
+    const { data, error } = await sb.rpc('get_session_phrases', { p_session_id: sessionIdParam });
     if (error || !data.session_found) {
       showFatalError('This session could not be found — ask your host for a new link. Showing a default board for now.');
       return await getDefaultPhrases();
     }
     if (Array.isArray(data.phrases) && sizeForPhraseCount(data.phrases.length)) {
+      // A real session with the host's own phrases — photos can go to their Drive.
+      sessionId = sessionIdParam;
+      uploadsEnabled = true;
       return data.phrases;
     }
   } catch (e) {}
@@ -934,6 +1145,7 @@ async function init() {
   phrases = await loadPhrases();
   applyBoardSize(sizeForPhraseCount(phrases.length) || 5);
   await buildBoard();
+  processUploads(); // resume any uploads left over from a previous visit
 }
 init();
 </script>

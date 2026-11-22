@@ -68,9 +68,29 @@
         if (session && !redirected) {
           redirected = true;
           sub.subscription.unsubscribe();
-          window.location.replace('dashboard.html');
+          // Deferred with setTimeout: calling other Supabase methods from inside an
+          // onAuthStateChange callback can deadlock the SDK.
+          setTimeout(() => saveDriveTokenThenContinue(session), 0);
         }
       });
+
+      // Google's refresh token (Drive access) is only in the session right now, straight
+      // after sign-in — Supabase doesn't keep it. Hand it to the store-drive-token Edge
+      // Function so players' photos can be uploaded to this host's Drive later. It's only
+      // present when Google showed the consent screen; otherwise one is already stored.
+      // Never blocks sign-in for long: the dashboard re-checks and offers "Connect Drive".
+      async function saveDriveTokenThenContinue(session) {
+        const refreshToken = session.provider_refresh_token;
+        if (refreshToken) {
+          try {
+            await Promise.race([
+              sb.functions.invoke('store-drive-token', { body: { action: 'store', refresh_token: refreshToken } }),
+              new Promise(resolve => setTimeout(resolve, 8000)),
+            ]);
+          } catch (e) {}
+        }
+        window.location.replace('dashboard.html');
+      }
 
       // Safety net: if nothing happens within ~6 seconds, redirect back to the
       // login page with a hint about extensions that might be blocking sign-in.

@@ -91,6 +91,14 @@
   }
   .guest-note a { color: var(--blue); }
 
+  .drive-status { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+  .drive-status.ok { color: var(--text); }
+  .drive-status b { color: var(--text); }
+  .drive-disconnect {
+    margin-top: 10px; background: none; border: none; padding: 0; cursor: pointer;
+    font-family: 'DM Sans', sans-serif; font-size: 0.75rem; color: var(--muted); text-decoration: underline;
+  }
+
   .session-active { display: flex; flex-direction: column; gap: 12px; }
   .share-row { display: flex; gap: 8px; align-items: center; }
   .share-url {
@@ -143,6 +151,13 @@
         You're hosting as a guest, so you're set up with the default phrase pack shown above.
         <a href="index.html">Sign in with Google</a> to write your own phrases or generate them with AI.
       </p>
+    </div>
+
+    <div class="card" id="driveCard">
+      <h2>📸 Photo storage</h2>
+      <p class="drive-status" id="driveStatus">Checking your Google Drive connection…</p>
+      <button class="btn-large" id="driveConnectBtn" style="display:none;">Connect Google Drive</button>
+      <button class="drive-disconnect" id="driveDisconnectBtn" type="button" style="display:none;">Disconnect Google Drive</button>
     </div>
 
     <div class="card" id="sessionCard">
@@ -483,6 +498,59 @@ function applyGuestMode() {
   document.getElementById('guestNote').style.display = 'block';
 }
 
+// ── Google Drive connection (where players' photos are saved) ──
+function renderDriveStatus(state) { // 'connected' | 'disconnected' | 'guest' | 'error'
+  const status = document.getElementById('driveStatus');
+  const connectBtn = document.getElementById('driveConnectBtn');
+  const disconnectBtn = document.getElementById('driveDisconnectBtn');
+  connectBtn.style.display = state === 'disconnected' || state === 'error' ? 'block' : 'none';
+  disconnectBtn.style.display = state === 'connected' ? 'inline' : 'none';
+  status.classList.toggle('ok', state === 'connected');
+  status.innerHTML = {
+    connected: '✓ Players\' photos are saved to your Google Drive, in the <b>Icebreaker Bingo</b> folder — one subfolder per session.',
+    disconnected: 'Your Google Drive isn\'t connected, so players\' photos will only be kept on their own phones. Connect it to collect every photo in your Drive.',
+    guest: 'Guest sessions keep players\' photos on their own phones only. <a href="index.html">Sign in with Google</a> to collect them in your Google Drive.',
+    error: 'Couldn\'t check your Google Drive connection. Reload to try again, or reconnect below.',
+  }[state];
+}
+
+async function checkDriveStatus() {
+  try {
+    const { data, error } = await sb.functions.invoke('store-drive-token', { body: { action: 'status' } });
+    if (error) throw error;
+    renderDriveStatus(data && data.connected ? 'connected' : 'disconnected');
+  } catch (e) {
+    renderDriveStatus('error');
+  }
+}
+
+function initDriveCard(isGuest) {
+  if (isGuest) { renderDriveStatus('guest'); return; }
+  document.getElementById('driveConnectBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('driveConnectBtn');
+    btn.disabled = true;
+    btn.textContent = 'Redirecting to Google…';
+    const { error } = await signInWithGoogle(true); // re-show consent to get a fresh Drive token
+    if (error) {
+      btn.disabled = false;
+      btn.textContent = 'Connect Google Drive';
+      showToast('✗ Could not start Google sign-in');
+    }
+  });
+  document.getElementById('driveDisconnectBtn').addEventListener('click', async () => {
+    if (!confirm('Disconnect Google Drive? New photos from players will stay on their phones. Photos already in your Drive are not deleted.')) return;
+    try {
+      const { error } = await sb.functions.invoke('store-drive-token', { body: { action: 'disconnect' } });
+      if (error) throw error;
+      renderDriveStatus('disconnected');
+      showToast('Google Drive disconnected');
+    } catch (e) {
+      showToast('✗ Could not disconnect — check connection');
+    }
+  });
+  checkDriveStatus();
+}
+
 async function initApp(session) {
   appInitialized = true;
   const isGuest = !!session.user.is_anonymous;
@@ -541,6 +609,7 @@ async function initApp(session) {
     if (e.target.id === 'qrOverlay') document.getElementById('qrOverlay').classList.remove('open');
   });
 
+  initDriveCard(isGuest);
   await loadPhrases(session.user.id, isGuest);
 }
 

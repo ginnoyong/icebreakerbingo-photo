@@ -35,6 +35,28 @@ function getDefaultPhrases() {
   return _defaultPhrasesPromise;
 }
 
+// Google sign-in, also asking for access to the files this app creates in the host's
+// Drive (drive.file — it can't see anything else there), so players' photos can be
+// saved to the host's Drive. access_type=offline makes Google return a refresh token,
+// which auth.html hands to the store-drive-token Edge Function.
+// forceConsent re-shows Google's consent screen — needed to get a fresh refresh token
+// when reconnecting Drive (Google only issues one when consent is actually shown).
+const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+function signInWithGoogle(forceConsent = false) {
+  return sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: new URL('auth.html', window.location.href).toString(),
+      scopes: DRIVE_FILE_SCOPE,
+      queryParams: {
+        access_type: 'offline',
+        include_granted_scopes: 'true',
+        ...(forceConsent ? { prompt: 'consent' } : {}),
+      },
+    },
+  });
+}
+
 // Global Supabase client instance — reuse this everywhere, never call createClient() again.
 // flowType: 'pkce' exchanges a short-lived code for the session server-side, so the
 // access token never appears in the URL (unlike the default implicit flow's #access_token=...).
