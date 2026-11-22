@@ -86,6 +86,8 @@ name. First to get a full row wins.
   (Deno) calling the [Groq API](https://console.groq.com/docs) (`openai/gpt-oss-20b`)
 - **QR codes:** [qrcodejs](https://github.com/davidshimjs/qrcodejs) via CDN
 - **Hosting:** GitHub Pages — fully static, no server required
+- **Local testing:** `npm start` serves the site at `http://localhost:4000` (uses `serve.json`).
+  `http://localhost:4000/auth.html` must be in Supabase's allowed redirect URLs for sign-in to work locally
 
 ---
 

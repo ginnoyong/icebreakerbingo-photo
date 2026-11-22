@@ -74,6 +74,32 @@
 }
 .cell.marked .stamp { opacity: 1; }
 
+/* Checked square with its proof photo as the background */
+.cell.has-photo {
+  background-color: #222; background-size: cover; background-position: center;
+  border-color: var(--orange);
+}
+.cell.has-photo .cell-text { opacity: 0; }
+.cell.has-photo .stamp {
+  align-items: flex-end; padding: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.65), rgba(0,0,0,0) 55%);
+}
+.photo-name {
+  width: 100%; padding: 0 4px 4px;
+  font-family: 'Syne', sans-serif; font-weight: 700;
+  font-size: clamp(0.6rem, 2.6vw, 0.82rem); line-height: 1.15;
+  color: #fff; text-align: center; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.photo-check {
+  position: absolute; top: 3px; right: 3px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--orange); color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
 /* ── Win Banner ── */
 .win-banner {
   display: none; margin: 0 10px 8px;
@@ -123,6 +149,55 @@
   border-radius: 12px; padding: 10px 14px; font-size: 0.8rem; line-height: 1.4;
 }
 .error-banner.show { display: block; }
+
+/* ── Photo capture sheet ── */
+#overlay { z-index: 400; }          /* above the photo viewer, for retakes */
+#confirmOverlay { z-index: 500; }   /* above everything */
+.photo-hint { font-size: 0.78rem; color: var(--muted); margin-top: 10px; line-height: 1.4; }
+.photo-preview {
+  display: none; width: 100%; max-height: 38vh; object-fit: contain;
+  background: #111; border-radius: 12px; margin-bottom: 12px;
+}
+.sheet-busy {
+  display: none; align-items: center; justify-content: center; gap: 10px;
+  padding: 14px 0 2px; font-size: 0.85rem; color: var(--muted);
+}
+.sheet-busy .spinner { width: 22px; height: 22px; border-width: 3px; }
+
+/* ── Photo viewer ── */
+.viewer {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: #0d0a0a; color: #fff; flex-direction: column;
+}
+.viewer.open { display: flex; }
+.viewer-top {
+  display: flex; align-items: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 14px 10px;
+}
+.viewer-btn {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.82rem;
+  border: none; border-radius: 12px; padding: 13px; cursor: pointer;
+  touch-action: manipulation; transition: transform 0.1s, background 0.15s;
+}
+.viewer-btn:active { transform: scale(0.96); }
+.viewer-back { background: rgba(255,255,255,0.14); color: #fff; padding: 10px 16px; border-radius: 99px; }
+.viewer-img-wrap {
+  flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+  padding: 0 10px;
+}
+.viewer-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; }
+.viewer-missing { color: rgba(255,255,255,0.7); text-align: center; font-size: 0.9rem; line-height: 1.5; padding: 0 24px; }
+.viewer-caption { padding: 14px 18px 2px; text-align: center; max-width: 480px; width: 100%; margin: 0 auto; }
+.viewer-phrase { font-size: 0.85rem; font-style: italic; opacity: 0.75; line-height: 1.4; }
+.viewer-name { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 1.15rem; color: #FFB48F; margin-top: 4px; }
+.viewer-actions {
+  display: flex; gap: 10px; width: 100%; max-width: 480px; margin: 0 auto;
+  padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+}
+.viewer-actions .viewer-btn { flex: 1; }
+.viewer-retake { background: var(--orange); color: #fff; }
+.viewer-retake:active { background: var(--orange-dk); }
+.viewer-remove { background: transparent; border: 1.5px solid rgba(255,255,255,0.3); color: #fff; }
 </style>
 </head>
 <body>
@@ -150,12 +225,13 @@
   </div>
 </div>
 
-<!-- Note bottom sheet -->
+<!-- Photo capture bottom sheet: take photo → preview → use / retake -->
 <div class="overlay" id="overlay" onclick="handleOverlayClick(event)">
   <div class="sheet" id="sheet">
     <div class="sheet-handle"></div>
-    <h3>Who matches this?</h3>
+    <h3 id="sheetTitle">Who matches this?</h3>
     <div class="sheet-phrase" id="sheetPhrase"></div>
+    <img class="photo-preview" id="photoPreview" alt="Photo preview">
     <div class="note-input-wrap">
       <input
         class="note-input" id="noteInput"
@@ -163,16 +239,59 @@
         placeholder="Name (optional)…"
         autocomplete="off" autocorrect="off" spellcheck="false"
         oninput="updateCharCount()"
-        onkeydown="if(event.key==='Enter'){event.preventDefault();closeNote(true);}"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
       >
       <span class="char-count" id="charCount">0/15</span>
     </div>
-    <div class="sheet-actions">
-      <button class="btn btn-ghost" onclick="closeNote(false)">Cancel</button>
-      <button class="btn btn-primary" onclick="closeNote(true)">Mark it ✓</button>
+    <p class="photo-hint" id="photoHint">📷 Take a photo of your match to check this square.</p>
+    <div class="sheet-busy" id="sheetBusy"><div class="spinner"></div>Preparing photo…</div>
+    <div class="sheet-actions" id="captureActions">
+      <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn btn-primary" onclick="takePhoto()">📷 Take photo</button>
+    </div>
+    <div class="sheet-actions" id="previewActions" style="display:none">
+      <button class="btn btn-ghost" onclick="takePhoto()">↺ Retake</button>
+      <button class="btn btn-primary" id="usePhotoBtn" onclick="usePhoto()">Use photo ✓</button>
     </div>
   </div>
 </div>
+
+<!-- Opens the phone's camera (falls back to a file picker on desktop) -->
+<input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+
+<!-- Full-screen photo viewer for a checked square -->
+<div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="Square photo">
+  <div class="viewer-top">
+    <button class="viewer-btn viewer-back" onclick="closeViewer()">← Back to board</button>
+  </div>
+  <div class="viewer-img-wrap">
+    <img class="viewer-img" id="viewerImg" alt="">
+    <p class="viewer-missing" id="viewerMissing">This photo isn't on this device any more.<br>Tap <b>Retake</b> to take a new one.</p>
+  </div>
+  <div class="viewer-caption">
+    <div class="viewer-phrase" id="viewerPhrase"></div>
+    <div class="viewer-name" id="viewerName"></div>
+  </div>
+  <div class="viewer-actions">
+    <button class="viewer-btn viewer-remove" onclick="removeCheckFromViewer()">Remove check</button>
+    <button class="viewer-btn viewer-retake" onclick="retakeFromViewer()">📷 Retake</button>
+  </div>
+</div>
+
+<!-- In-page confirm dialog (instead of window.confirm) -->
+<div class="overlay" id="confirmOverlay">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h3 id="confirmTitle"></h3>
+    <p class="sub" id="confirmText"></p>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="confirmCancel">Cancel</button>
+      <button class="btn btn-primary" id="confirmOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <canvas id="fireworks"></canvas>
 
@@ -189,7 +308,111 @@ let freeIndex = 12;
 let LINES = [];
 let marks = new Array(25).fill(false);
 let notes = new Array(25).fill("");
-let activeCell = null;
+let activeCell = null;   // square the capture sheet is open for
+let hasWon = false;      // so fireworks only fire when a line is first completed
+
+// Identifies this player's board on this phone: same session + same seed = same board.
+let boardKey = '';
+function currentBoardKey(seed) {
+  const p = new URLSearchParams(window.location.search);
+  const id = p.get('session') || (p.get('guest') === '1' ? 'guest' : 'nosession');
+  return id + '|' + seed;
+}
+function photoKey(i) { return boardKey + '|' + i; }
+
+// ── Saved progress (marks + names) in localStorage ──
+const PROGRESS_PREFIX = 'bingo-photo:progress:';
+function saveProgress() {
+  try {
+    localStorage.setItem(PROGRESS_PREFIX + boardKey, JSON.stringify({ v: 1, board: shuffled, marks, notes }));
+  } catch (e) {}
+}
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(PROGRESS_PREFIX + boardKey) || 'null'); } catch (e) { return null; }
+}
+function clearProgress(key) {
+  try { localStorage.removeItem(PROGRESS_PREFIX + key); } catch (e) {}
+}
+
+// ── Photo storage on this phone (IndexedDB; in-memory if IndexedDB is unavailable) ──
+// Record shape: { phrase, name, view: Blob (≤1600px), thumb: Blob (≤360px), takenAt }
+const PhotoStore = (() => {
+  const mem = new Map();
+  let dbPromise = null;
+  function db() {
+    if (!dbPromise) dbPromise = new Promise(resolve => {
+      try {
+        const req = indexedDB.open('bingo-photo', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('photos');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = req.onblocked = () => resolve(null);
+      } catch (e) { resolve(null); }
+    });
+    return dbPromise;
+  }
+  function run(d, mode, fn) {
+    return new Promise((resolve, reject) => {
+      const t = d.transaction('photos', mode);
+      const out = fn(t.objectStore('photos'));
+      t.oncomplete = () => resolve(out);
+      t.onerror = t.onabort = () => reject(t.error);
+    });
+  }
+  const range = prefix => IDBKeyRange.bound(prefix, prefix + '￿');
+  return {
+    async put(key, rec) {
+      mem.set(key, rec);
+      const d = await db();
+      if (d) { try { await run(d, 'readwrite', s => s.put(rec, key)); mem.delete(key); } catch (e) {} }
+    },
+    async delete(key) {
+      mem.delete(key);
+      const d = await db();
+      if (d) { try { await run(d, 'readwrite', s => s.delete(key)); } catch (e) {} }
+    },
+    async deleteBoard(prefix) {
+      [...mem.keys()].forEach(k => { if (k.startsWith(prefix)) mem.delete(k); });
+      const d = await db();
+      if (d) { try { await run(d, 'readwrite', s => s.delete(range(prefix))); } catch (e) {} }
+    },
+    // → Map(key → record) for every photo of one board
+    async getBoard(prefix) {
+      const found = new Map();
+      const d = await db();
+      if (d) {
+        try {
+          await run(d, 'readonly', s => {
+            const req = s.openCursor(range(prefix));
+            req.onsuccess = () => {
+              const c = req.result;
+              if (c) { found.set(c.key, c.value); c.continue(); }
+            };
+          });
+        } catch (e) {}
+      }
+      mem.forEach((v, k) => { if (k.startsWith(prefix)) found.set(k, v); });
+      return found;
+    },
+  };
+})();
+
+// In-memory photo records + thumbnail URLs for the current board, by square index.
+let photoRecs = {};
+let thumbUrls = {};
+function setPhoto(i, rec) {
+  dropPhoto(i);
+  photoRecs[i] = rec;
+  thumbUrls[i] = URL.createObjectURL(rec.thumb);
+}
+function dropPhoto(i) {
+  if (thumbUrls[i]) URL.revokeObjectURL(thumbUrls[i]);
+  delete thumbUrls[i];
+  delete photoRecs[i];
+}
+function clearAllPhotos() {
+  Object.keys(thumbUrls).forEach(dropPhoto);
+  photoRecs = {}; thumbUrls = {};
+}
 
 // A saved/shared phrase set only ever comes from one of the supported board
 // sizes (n*n - 1 phrases, n odd) — anything else is stale or corrupt data.
@@ -242,26 +465,67 @@ function getSeed() {
   }
 }
 
-function buildBoard() {
+// Builds the board for the current seed, then restores any progress and photos saved
+// on this phone for it. A saved square is only restored if it still holds the same
+// phrase — if the host has since edited their phrases, stale squares are dropped.
+async function buildBoard() {
   const seed = getSeed();
+  boardKey = currentBoardKey(seed);
   let pool = seededShuffle(phrases, seed);
   pool.splice(freeIndex, 0, null);
   shuffled = pool.slice(0, total);
   marks = new Array(total).fill(false);
   notes = new Array(total).fill("");
   marks[freeIndex] = true;
+  clearAllPhotos();
+
+  const saved = loadProgress();
+  if (saved && Array.isArray(saved.board) && saved.board.length === total) {
+    for (let i = 0; i < total; i++) {
+      if (i !== freeIndex && saved.marks?.[i] && saved.board[i] === shuffled[i]) {
+        marks[i] = true;
+        notes[i] = String(saved.notes?.[i] || '').slice(0, 15);
+      }
+    }
+  }
+
+  const recs = await PhotoStore.getBoard(boardKey + '|');
+  recs.forEach((rec, key) => {
+    const i = Number(key.slice(boardKey.length + 1));
+    if (Number.isInteger(i) && i !== freeIndex && shuffled[i] === rec.phrase) {
+      // The photo is the proof, so it also restores the check if localStorage was lost.
+      marks[i] = true;
+      if (!notes[i]) notes[i] = rec.name || '';
+      setPhoto(i, rec);
+    } else {
+      PhotoStore.delete(key);
+    }
+  });
+
+  hasWon = false;
   renderGrid();
   updateCount();
-  document.getElementById('winBanner').classList.remove('show');
+  checkWin(false);
+  saveProgress();
 }
 
-function reshuffleBoard() {
+function checkedCount() { return Math.max(0, marks.filter(Boolean).length - 1); }
+
+async function reshuffleBoard() {
+  const n = checkedCount();
+  if (n > 0 && !(await askConfirm(
+    'Reshuffle your board?',
+    `You'll get a new layout. Your ${n} checked square${n === 1 ? '' : 's'} and ${n === 1 ? 'its photo' : 'their photos'} on this phone will be deleted.`,
+    'Reshuffle'))) return;
+  const oldKey = boardKey;
+  await PhotoStore.deleteBoard(oldKey + '|');
+  clearProgress(oldKey);
   try {
     const url = new URL(window.location.href);
     url.searchParams.set('seed', Math.floor(Math.random() * 9999999));
     history.replaceState({}, '', url);
   } catch(e) {}
-  buildBoard();
+  await buildBoard();
 }
 
 function fitCellText() {
@@ -285,14 +549,21 @@ function renderGrid() {
   shuffled.forEach((phrase, i) => {
     const cell = document.createElement('div');
     const isFree = i === freeIndex;
-    cell.className = 'cell' + (isFree ? ' free' : '') + (marks[i] ? ' marked' : '');
+    const thumb = !isFree && marks[i] ? thumbUrls[i] : null;
+    cell.className = 'cell' + (isFree ? ' free' : '') + (marks[i] ? ' marked' : '') + (thumb ? ' has-photo' : '');
+    if (thumb) cell.style.backgroundImage = `url("${thumb}")`;
     const label = isFree ? '⭐ FREE' : escHtml(phrase || '');
     const note = notes[i] || '';
-    const stampContent = note
-      ? `<span class="stamp-name">${escHtml(note)}</span>`
-      : `<span class="stamp-check">✓</span>`;
+    let stampContent;
+    if (thumb) {
+      stampContent = `<span class="photo-check">✓</span>` + (note ? `<span class="photo-name">${escHtml(note)}</span>` : '');
+    } else {
+      stampContent = note
+        ? `<span class="stamp-name">${escHtml(note)}</span>`
+        : `<span class="stamp-check">✓</span>`;
+    }
     cell.innerHTML = `<div class="cell-text">${label}</div><div class="stamp">${stampContent}</div>`;
-    if (!isFree) cell.addEventListener('click', () => openNote(i));
+    if (!isFree) cell.addEventListener('click', () => marks[i] ? openViewer(i) : openCapture(i, 'new'));
     grid.appendChild(cell);
   });
   requestAnimationFrame(() => requestAnimationFrame(fitCellText));
@@ -302,31 +573,236 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function openNote(i) {
-  if (marks[i]) {
-    marks[i] = false; notes[i] = '';
-    renderGrid(); updateCount(); checkWin(); return;
+// ── Photo processing ──
+// Decodes the camera image (respecting EXIF rotation) and re-encodes two JPEGs:
+// a viewer copy and a small grid thumbnail. Both are kept on this phone only.
+const VIEW_MAX_EDGE = 1600;
+const THUMB_MAX_EDGE = 360;
+
+async function decodeImage(file) {
+  if (window.createImageBitmap) {
+    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) {}
   }
-  activeCell = i;
-  document.getElementById('sheetPhrase').textContent = shuffled[i] || '';
-  document.getElementById('noteInput').value = notes[i] || '';
-  updateCharCount();
-  document.getElementById('overlay').classList.add('open');
-  setTimeout(() => document.getElementById('noteInput').focus(), 80);
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
-function closeNote(confirm) {
-  if (confirm && activeCell !== null) {
-    marks[activeCell] = true;
-    notes[activeCell] = document.getElementById('noteInput').value.slice(0, 15);
-    renderGrid(); updateCount(); checkWin();
+function encodeJpeg(src, maxEdge, quality) {
+  const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
+  const scale = Math.min(1, maxEdge / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * scale));
+  c.height = Math.max(1, Math.round(h * scale));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  return new Promise((resolve, reject) => c.toBlob(blob => {
+    c.width = c.height = 0; // free canvas memory promptly (matters on iOS)
+    blob ? resolve(blob) : reject(new Error('JPEG encode failed'));
+  }, 'image/jpeg', quality));
+}
+
+async function preparePhoto(file) {
+  const src = await decodeImage(file);
+  try {
+    const view = await encodeJpeg(src, VIEW_MAX_EDGE, 0.82);
+    const thumb = await encodeJpeg(src, THUMB_MAX_EDGE, 0.7);
+    return { view, thumb };
+  } finally {
+    if (src.close) src.close();
   }
+}
+
+// ── Capture sheet: Take photo → preview → Use photo / Retake ──
+let pendingPhoto = null; // { view, thumb, previewUrl } — taken but not yet used
+
+function discardPending() {
+  if (pendingPhoto) URL.revokeObjectURL(pendingPhoto.previewUrl);
+  pendingPhoto = null;
+  document.getElementById('photoPreview').removeAttribute('src');
+}
+
+function showSheetStep(step) { // 'capture' | 'busy' | 'preview'
+  document.getElementById('photoPreview').style.display = step === 'preview' ? 'block' : 'none';
+  document.getElementById('photoHint').style.display = step === 'capture' ? 'block' : 'none';
+  document.getElementById('sheetBusy').style.display = step === 'busy' ? 'flex' : 'none';
+  document.getElementById('captureActions').style.display = step === 'capture' ? 'flex' : 'none';
+  document.getElementById('previewActions').style.display = step === 'preview' ? 'flex' : 'none';
+}
+
+function openCapture(i, mode) { // mode: 'new' | 'retake'
+  activeCell = i;
+  discardPending();
+  document.getElementById('sheetTitle').textContent = mode === 'retake' ? 'Retake photo' : 'Who matches this?';
+  document.getElementById('sheetPhrase').textContent = shuffled[i] || '';
+  document.getElementById('noteInput').value = notes[i] || '';
+  document.getElementById('usePhotoBtn').disabled = false;
+  updateCharCount();
+  showSheetStep('capture');
+  document.getElementById('overlay').classList.add('open');
+}
+
+function closeSheet() {
   document.getElementById('overlay').classList.remove('open');
+  discardPending();
   activeCell = null;
 }
 
 function handleOverlayClick(e) {
-  if (e.target === document.getElementById('overlay')) closeNote(false);
+  if (e.target === document.getElementById('overlay')) closeSheet();
+}
+
+// Must run straight from a tap — browsers only open the camera on a user gesture.
+function takePhoto() {
+  const input = document.getElementById('cameraInput');
+  input.value = ''; // so choosing the same file again still fires 'change'
+  input.click();
+}
+
+document.getElementById('cameraInput').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file || activeCell === null) return;
+  const hadPreview = !!pendingPhoto;
+  showSheetStep('busy');
+  try {
+    const p = await preparePhoto(file);
+    if (activeCell === null) return; // sheet was closed while processing
+    discardPending();
+    pendingPhoto = { ...p, previewUrl: URL.createObjectURL(p.view) };
+    document.getElementById('photoPreview').src = pendingPhoto.previewUrl;
+    showSheetStep('preview');
+  } catch (err) {
+    console.error('Photo processing failed:', err);
+    showSheetStep(hadPreview ? 'preview' : 'capture');
+    showToast("Couldn't read that photo — please try taking it again.");
+  }
+});
+
+async function usePhoto() {
+  if (activeCell === null || !pendingPhoto) return;
+  document.getElementById('usePhotoBtn').disabled = true;
+  const i = activeCell;
+  const name = document.getElementById('noteInput').value.slice(0, 15);
+  const rec = { phrase: shuffled[i], name, view: pendingPhoto.view, thumb: pendingPhoto.thumb, takenAt: Date.now() };
+  await PhotoStore.put(photoKey(i), rec);
+  setPhoto(i, rec);
+  marks[i] = true;
+  notes[i] = name;
+  saveProgress();
+  closeSheet();
+  renderGrid(); updateCount(); checkWin();
+  if (viewerCell === i) refreshViewer();
+  // Drive upload (build step 3) will be queued here.
+}
+
+// ── Photo viewer ──
+let viewerCell = null;
+let viewerUrl = null;
+
+function openViewer(i) {
+  viewerCell = i;
+  refreshViewer();
+  document.getElementById('viewer').classList.add('open');
+  // Lets the phone's back button/gesture close the viewer instead of leaving the game.
+  try { history.pushState({ bingoViewer: true }, ''); } catch (e) {}
+}
+
+function refreshViewer() {
+  const i = viewerCell;
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; }
+  const rec = photoRecs[i];
+  const img = document.getElementById('viewerImg');
+  if (rec) {
+    viewerUrl = URL.createObjectURL(rec.view);
+    img.src = viewerUrl;
+    img.alt = 'Photo for: ' + (shuffled[i] || '');
+    img.style.display = 'block';
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  document.getElementById('viewerMissing').style.display = rec ? 'none' : 'block';
+  document.getElementById('viewerPhrase').textContent = shuffled[i] || '';
+  document.getElementById('viewerName').textContent = notes[i] || '';
+}
+
+function closeViewer(fromPopState) {
+  if (viewerCell === null) return;
+  document.getElementById('viewer').classList.remove('open');
+  viewerCell = null;
+  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; }
+  if (!fromPopState && history.state && history.state.bingoViewer) history.back();
+}
+
+window.addEventListener('popstate', () => {
+  if (activeCell !== null) closeSheet();
+  if (viewerCell !== null) closeViewer(true);
+});
+
+function retakeFromViewer() {
+  if (viewerCell === null) return;
+  openCapture(viewerCell, 'retake');
+  takePhoto(); // open the camera right away; the sheet waits underneath
+}
+
+async function removeCheckFromViewer() {
+  const i = viewerCell;
+  if (i === null) return;
+  if (!(await askConfirm('Remove this check?',
+    'The square will be unchecked and its photo deleted from this phone.', 'Remove'))) return;
+  await PhotoStore.delete(photoKey(i));
+  dropPhoto(i);
+  marks[i] = false;
+  notes[i] = '';
+  saveProgress();
+  closeViewer();
+  renderGrid(); updateCount(); checkWin(false);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (document.getElementById('confirmOverlay').classList.contains('open')) return; // handled there
+  if (activeCell !== null) closeSheet();
+  else if (viewerCell !== null) closeViewer();
+});
+
+// ── In-page confirm dialog → Promise<boolean> ──
+function askConfirm(title, text, okLabel) {
+  return new Promise(resolve => {
+    const ov = document.getElementById('confirmOverlay');
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmText').textContent = text;
+    const ok = document.getElementById('confirmOk');
+    const cancel = document.getElementById('confirmCancel');
+    ok.textContent = okLabel || 'OK';
+    const done = value => {
+      ov.classList.remove('open');
+      ok.onclick = cancel.onclick = ov.onclick = null;
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    };
+    const onKey = e => { if (e.key === 'Escape') done(false); };
+    ok.onclick = () => done(true);
+    cancel.onclick = () => done(false);
+    ov.onclick = e => { if (e.target === ov) done(false); };
+    document.addEventListener('keydown', onKey);
+    ov.classList.add('open');
+  });
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
 function updateCharCount() {
@@ -336,22 +812,31 @@ function updateCharCount() {
   el.className = 'char-count' + (v >= 15 ? ' full' : '');
 }
 
-function resetMarks() {
+async function resetMarks() {
+  const n = checkedCount();
+  if (n === 0) return;
+  if (!(await askConfirm(
+    'Clear your board?',
+    `This unchecks all ${n} square${n === 1 ? '' : 's'} and deletes ${n === 1 ? 'its photo' : 'their photos'} from this phone.`,
+    'Clear'))) return;
+  await PhotoStore.deleteBoard(boardKey + '|');
+  clearAllPhotos();
   marks = new Array(total).fill(false);
   notes = new Array(total).fill(""); marks[freeIndex] = true;
-  renderGrid(); updateCount();
-  document.getElementById('winBanner').classList.remove('show');
+  saveProgress();
+  renderGrid(); updateCount(); checkWin(false);
 }
 
 function updateCount() {
-  document.getElementById('count').textContent = Math.max(0, marks.filter(Boolean).length - 1);
+  document.getElementById('count').textContent = checkedCount();
 }
 
-function checkWin() {
-  if (LINES.some(line => line.every(i => marks[i]))) {
-    document.getElementById('winBanner').classList.add('show');
-    launchFireworks();
-  }
+// Shows/hides the BINGO banner; fireworks only when a line is newly completed.
+function checkWin(celebrate = true) {
+  const won = LINES.some(line => line.every(i => marks[i]));
+  document.getElementById('winBanner').classList.toggle('show', won);
+  if (won && !hasWon && celebrate) launchFireworks();
+  hasWon = won;
 }
 
 function launchFireworks() {
@@ -448,7 +933,7 @@ async function loadPhrases() {
 async function init() {
   phrases = await loadPhrases();
   applyBoardSize(sizeForPhraseCount(phrases.length) || 5);
-  buildBoard();
+  await buildBoard();
 }
 init();
 </script>
