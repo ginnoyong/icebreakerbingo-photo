@@ -1,8 +1,8 @@
 // Shared Supabase config — loaded by index.html, auth.html, dashboard.html, game.html
 // Requires the Supabase UMD script (window.supabase) to be loaded BEFORE this file.
 
-const SUPABASE_URL = "https://hqgemmfrpbpkecxxxhab.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxZ2VtbWZycGJwa2VjeHh4aGFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzcyMDgsImV4cCI6MjA5NDExMzIwOH0.WjHpA2_MBg-CVY9G6t0cw31f_ZfXT-tZekcBWquT2x4";
+const SUPABASE_URL = "https://yqnqigwfvumeqcurfthl.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlxbnFpZ3dmdnVtZXFjdXJmdGhsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUzMjg3MDcsImV4cCI6MjExMDkwNDcwN30.FrJ8CIINhpm3vspVAC-wShWNlLRml2hdpv-iXw1fvhE";
 
 // Default phrase pack — the starting set of 24 phrases for any host who hasn't saved
 // their own yet. Lives as a standalone JSON file under phrase-packs/ (see CONTRIBUTING.md)
