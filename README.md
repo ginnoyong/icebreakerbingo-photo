@@ -1,4 +1,4 @@
-https://ginnoyong.github.io/icebreakerbingo/
+https://ginnoyong.github.io/icebreakerbingo-photo/
 
 # 🎉 Icebreaker Bingo
 

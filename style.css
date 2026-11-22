@@ -179,3 +179,12 @@ html, body {
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
+
+/* ── Photo edition badge (next to the wordmark) ── */
+.edition-badge {
+  display: inline-block; vertical-align: middle;
+  font-family: 'DM Sans', sans-serif; font-size: 0.42em; font-weight: 500;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--orange-dk); background: var(--orange-lt);
+  border-radius: 999px; padding: 3px 9px 4px; margin-left: 4px;
+}
