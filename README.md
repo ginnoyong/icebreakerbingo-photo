@@ -25,6 +25,8 @@ name. First to get a full row wins.
 | `terms.html` | Terms of service |
 | `config.js` | Shared Supabase config + default-phrase-pack loader, loaded by every page |
 | `style.css` | Shared visual tokens and components, loaded by every page |
+| `photo-label.js` | Host's event title (font + colour) drawn onto photos uploaded to their Drive — layout shared by the dashboard's SVG preview and the game's canvas |
+| `supabase/sql/photo-label.sql` | `host_photo_settings` table + `get_session_phrases` returning the label — run after `drive-photos.sql` |
 | `supabase/functions/generate-phrases/index.ts` | Edge Function — takes a theme, existing phrases, and how many are needed, calls the Groq API, returns new phrases (deduplicated against the existing ones) |
 | `phrase-packs/singapore-school-life.json` | The live default phrase pack — 24 phrases fetched at runtime for any host with no saved phrases yet. Community-contributed packs also live under `phrase-packs/` (see `CONTRIBUTING.md`), though only this file is wired in as the automatic default |
 

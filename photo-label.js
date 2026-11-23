@@ -1,0 +1,226 @@
+// Photo label — the host's event title drawn onto every photo saved to their Google Drive.
+//
+// Shared by dashboard.html (SVG preview under the settings) and game.html (drawn onto
+// the full-size photo on a canvas just before upload). Both use layoutPhotoLabel(), so
+// the preview matches the real result: every size is relative to the photo's shorter
+// edge (u = min(w, h) / 1000), which keeps the look identical for landscape, portrait,
+// square, large or small photos.
+
+const PHOTO_TITLE_MAX = 40;
+
+// Keys must match the CHECK constraint in supabase/sql/photo-label.sql.
+const PHOTO_FONTS = {
+  syne:     { label: 'Syne — bold',            family: 'Syne',             weight: 800 },
+  dmsans:   { label: 'DM Sans — clean',        family: 'DM Sans',          weight: 700 },
+  bebas:    { label: 'Bebas Neue — tall',      family: 'Bebas Neue',       weight: 400 },
+  playfair: { label: 'Playfair — elegant',     family: 'Playfair Display', weight: 700 },
+  pacifico: { label: 'Pacifico — script',      family: 'Pacifico',         weight: 400 },
+  marker:   { label: 'Permanent Marker',       family: 'Permanent Marker', weight: 400 },
+  caveat:   { label: 'Caveat — handwritten',   family: 'Caveat',           weight: 700 },
+};
+
+const PHOTO_COLORS = ['#FFFFFF', '#1A1010', '#E8521A', '#FFD43B', '#3B5BDB', '#F783AC', '#40C057'];
+
+// Load every label font's stylesheet once. Font files themselves are only downloaded
+// when a font is actually used (loadPhotoFont), so this stays light.
+(function injectPhotoFonts() {
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://fonts.googleapis.com/css2?family=Syne:wght@800&family=DM+Sans:wght@700'
+    + '&family=Bebas+Neue&family=Playfair+Display:wght@700&family=Pacifico'
+    + '&family=Permanent+Marker&family=Caveat:wght@700&display=swap';
+  document.head.appendChild(link);
+})();
+
+function normalizePhotoLabel(raw) {
+  const l = raw || {};
+  return {
+    title: String(l.title || '').replace(/\s+/g, ' ').trim().slice(0, PHOTO_TITLE_MAX),
+    font: PHOTO_FONTS[l.font] ? l.font : 'syne',
+    color: /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color.toUpperCase() : '#FFFFFF',
+  };
+}
+
+function photoFontCss(font, px) {
+  const f = PHOTO_FONTS[font] || PHOTO_FONTS.syne;
+  return `${f.weight} ${px}px "${f.family}", sans-serif`;
+}
+
+// Waits for the font (with the glyphs this title needs). Canvas text silently falls
+// back to a default font if it isn't loaded yet. Offline → falls back to sans-serif.
+async function loadPhotoFont(font, text) {
+  try {
+    await document.fonts.load(photoFontCss(font, 64), text || 'Aa');
+  } catch (e) {}
+}
+
+// Dark text gets a light band behind it; light text a dark band.
+function isDarkPhotoColor(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const lum = 0.2126 * lin(n >> 16 & 255) + 0.7152 * lin(n >> 8 & 255) + 0.0722 * lin(n & 255);
+  return lum < 0.35;
+}
+
+let _labelMeasureCtx = null;
+function measureLabelText(text, font, px) {
+  if (!_labelMeasureCtx) _labelMeasureCtx = document.createElement('canvas').getContext('2d');
+  _labelMeasureCtx.font = photoFontCss(font, px);
+  return _labelMeasureCtx.measureText(text).width;
+}
+
+// Greedy word wrap; null if it needs more than maxLines lines or a word is too wide.
+function wrapLabelWords(text, font, px, maxW, maxLines) {
+  const words = text.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const word of words) {
+    const test = cur ? cur + ' ' + word : word;
+    if (measureLabelText(test, font, px) <= maxW) { cur = test; continue; }
+    if (!cur || measureLabelText(word, font, px) > maxW) return null;
+    lines.push(cur);
+    cur = word;
+  }
+  if (cur) lines.push(cur);
+  return lines.length <= maxLines ? lines : null;
+}
+
+// Last resort at the smallest size: break anywhere, end with "…".
+function truncateLabelLines(text, font, px, maxW, maxLines) {
+  const chars = Array.from(text); // keeps emoji / surrogate pairs whole
+  const lines = [];
+  let cur = '';
+  for (let k = 0; k < chars.length; k++) {
+    const test = cur + chars[k];
+    if (measureLabelText(test, font, px) <= maxW) { cur = test; continue; }
+    if (lines.length === maxLines - 1) {
+      while (cur && measureLabelText(cur + '…', font, px) > maxW) cur = Array.from(cur).slice(0, -1).join('');
+      lines.push(cur.trimEnd() + '…');
+      return lines;
+    }
+    lines.push(cur);
+    cur = chars[k];
+  }
+  lines.push(cur);
+  return lines;
+}
+
+// → geometry for a w × h photo. All values in the photo's own pixels.
+function layoutPhotoLabel(w, h, label) {
+  const u = Math.min(w, h) / 1000;
+  const maxW = w - 2 * 70 * u;
+  let px = 80 * u;
+  let lines = null;
+  for (let size = 80; size >= 40 && !lines; size -= 4) {
+    px = size * u;
+    lines = wrapLabelWords(label.title, label.font, px, maxW, 2);
+  }
+  if (!lines) lines = truncateLabelLines(label.title, label.font, px, maxW, 2);
+  const lineH = px * 1.22;
+  const padY = 46 * u;
+  const textTop = h - padY - lines.length * lineH;
+  const dark = isDarkPhotoColor(label.color);
+  return {
+    u, px, lines, lineH, padY, textTop,
+    frame: 12 * u,
+    fadeTop: textTop - padY - 110 * u,   // where the band starts fading in
+    solidTop: textTop - padY * 0.6,      // fully opaque below here
+    band: dark ? '255,255,255' : '0,0,0',
+    bandAlpha: dark ? 0.78 : 0.62,
+    shadow: dark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.5)',
+    baseline: k => textTop + k * lineH + lineH * 0.8,
+  };
+}
+
+// Draws frame + band + title onto a canvas that already holds the photo.
+function drawPhotoLabel(ctx, w, h, label) {
+  const L = layoutPhotoLabel(w, h, label);
+  const g = ctx.createLinearGradient(0, L.fadeTop, 0, L.solidTop);
+  g.addColorStop(0, `rgba(${L.band},0)`);
+  g.addColorStop(1, `rgba(${L.band},${L.bandAlpha})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, L.fadeTop, w, L.solidTop - L.fadeTop);
+  ctx.fillStyle = `rgba(${L.band},${L.bandAlpha})`;
+  ctx.fillRect(0, L.solidTop, w, h - L.solidTop);
+
+  ctx.strokeStyle = label.color;
+  ctx.lineWidth = L.frame;
+  ctx.strokeRect(L.frame / 2, L.frame / 2, w - L.frame, h - L.frame);
+
+  ctx.save();
+  ctx.font = photoFontCss(label.font, L.px);
+  ctx.fillStyle = label.color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.shadowColor = L.shadow;
+  ctx.shadowBlur = 8 * L.u;
+  ctx.shadowOffsetY = 2 * L.u;
+  L.lines.forEach((line, k) => ctx.fillText(line, w / 2, L.baseline(k)));
+  ctx.restore();
+}
+
+// Full-size JPEG → same photo with the label drawn on. Returns the input unchanged if
+// there's no title.
+async function composeLabelledPhoto(blob, label) {
+  if (!label || !label.title) return blob;
+  await loadPhotoFont(label.font, label.title);
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bmp.width;
+  c.height = bmp.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bmp, 0, 0);
+  bmp.close();
+  drawPhotoLabel(ctx, c.width, c.height, label);
+  return new Promise((resolve, reject) => c.toBlob(out => {
+    c.width = c.height = 0;
+    out ? resolve(out) : reject(new Error('JPEG encode failed'));
+  }, 'image/jpeg', 0.85));
+}
+
+// SVG sample for the dashboard: a placeholder "photo" with the label laid out exactly
+// as it will be on a 4:3 photo.
+function photoLabelSvg(label, w = 800, h = 600) {
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const f = PHOTO_FONTS[label.font] || PHOTO_FONTS.syne;
+  const photo = `
+    <defs>
+      <linearGradient id="plSky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#8EC5E8"/><stop offset="1" stop-color="#F4D9B8"/>
+      </linearGradient>
+    </defs>
+    <rect width="${w}" height="${h}" fill="url(#plSky)"/>
+    <rect y="${h * 0.62}" width="${w}" height="${h * 0.38}" fill="#9BBF85"/>
+    <g fill="#5A4A6B" opacity="0.85">
+      <circle cx="${w * 0.38}" cy="${h * 0.36}" r="${h * 0.075}"/>
+      <rect x="${w * 0.31}" y="${h * 0.45}" width="${w * 0.14}" height="${h * 0.36}" rx="${h * 0.06}"/>
+    </g>
+    <g fill="#B85C38" opacity="0.85">
+      <circle cx="${w * 0.6}" cy="${h * 0.33}" r="${h * 0.08}"/>
+      <rect x="${w * 0.525}" y="${h * 0.43}" width="${w * 0.15}" height="${h * 0.38}" rx="${h * 0.06}"/>
+    </g>`;
+  if (!label.title) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="Sample photo with no label">${photo}</svg>`;
+  }
+  const L = layoutPhotoLabel(w, h, label);
+  const fadeH = L.solidTop - L.fadeTop;
+  const text = L.lines.map((line, k) =>
+    `<text x="${w / 2}" y="${L.baseline(k).toFixed(1)}">${esc(line)}</text>`).join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="Sample photo labelled: ${esc(label.title)}">
+    ${photo}
+    <defs>
+      <linearGradient id="plFade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="rgb(${L.band})" stop-opacity="0"/>
+        <stop offset="1" stop-color="rgb(${L.band})" stop-opacity="${L.bandAlpha}"/>
+      </linearGradient>
+      <filter id="plShadow" x="-10%" y="-50%" width="120%" height="200%">
+        <feDropShadow dx="0" dy="${(2 * L.u).toFixed(2)}" stdDeviation="${(4 * L.u).toFixed(2)}" flood-color="${L.shadow}"/>
+      </filter>
+    </defs>
+    <rect y="${L.fadeTop.toFixed(1)}" width="${w}" height="${fadeH.toFixed(1)}" fill="url(#plFade)"/>
+    <rect y="${L.solidTop.toFixed(1)}" width="${w}" height="${(h - L.solidTop).toFixed(1)}" fill="rgb(${L.band})" fill-opacity="${L.bandAlpha}"/>
+    <rect x="${L.frame / 2}" y="${L.frame / 2}" width="${w - L.frame}" height="${h - L.frame}" fill="none" stroke="${label.color}" stroke-width="${L.frame}"/>
+    <g font-family="&quot;${f.family}&quot;, sans-serif" font-weight="${f.weight}" font-size="${L.px.toFixed(1)}"
+       fill="${label.color}" text-anchor="middle" filter="url(#plShadow)">${text}</g>
+  </svg>`;
+}

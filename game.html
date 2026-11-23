@@ -319,6 +319,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
+<script src="photo-label.js"></script>
 <script>
 const VALID_BOARD_SIZES = [3, 5, 7];
 
@@ -766,15 +767,30 @@ let uploadRunning = false;
 let retryTimer = null;
 let retryDelay = 5000;
 let warnedNotConnected = false;
+let photoLabel = null; // host's event title / font / colour (photo-label.js), from the session
+
+// The clean full-size photo stays on the phone; the host's event title is drawn onto
+// the copy only as it's sent, so retakes and queued uploads always use the latest title.
+// If drawing fails for any reason, the plain photo is sent rather than nothing.
+async function photoForUpload(rec) {
+  if (!photoLabel || !photoLabel.title) return rec.upload;
+  try {
+    return await composeLabelledPhoto(rec.upload, photoLabel);
+  } catch (e) {
+    console.error('Adding photo title failed — uploading plain photo:', e);
+    return rec.upload;
+  }
+}
 
 async function uploadOne(i, rec) {
+  const photo = await photoForUpload(rec);
   const fd = new FormData();
   fd.append('session_id', sessionId);
   fd.append('cell_index', String(i));
   fd.append('phrase', rec.phrase);
   fd.append('name', rec.name || '');
   if (rec.driveFileId) fd.append('file_id', rec.driveFileId);
-  fd.append('photo', rec.upload, 'photo.jpg');
+  fd.append('photo', photo, 'photo.jpg');
   try {
     const res = await fetch(SUPABASE_URL + '/functions/v1/upload-photo', {
       method: 'POST',
@@ -1135,6 +1151,10 @@ async function loadPhrases() {
       // A real session with the host's own phrases — photos can go to their Drive.
       sessionId = sessionIdParam;
       uploadsEnabled = true;
+      if (data.photo_label && data.photo_label.title) {
+        photoLabel = normalizePhotoLabel(data.photo_label);
+        loadPhotoFont(photoLabel.font, photoLabel.title); // warm up before the first upload
+      }
       return data.phrases;
     }
   } catch (e) {}

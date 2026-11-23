@@ -94,6 +94,45 @@
   .drive-status { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
   .drive-status.ok { color: var(--text); }
   .drive-status b { color: var(--text); }
+  /* Event title drawn onto Drive photos */
+  .photo-label { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .label-heading { font-family: 'Syne', sans-serif; font-size: 0.85rem; font-weight: 700; color: var(--orange); }
+  .label-hint { font-size: 0.72rem; color: var(--muted); line-height: 1.45; margin: 4px 0 10px; }
+  .label-input-wrap { position: relative; }
+  #labelTitle, #labelFont {
+    width: 100%; border: 1.5px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 0.95rem;
+    outline: none; color: var(--text); background: var(--card); appearance: none;
+  }
+  #labelTitle { padding-right: 52px; }
+  #labelTitle:focus, #labelFont:focus { border-color: var(--orange); }
+  #labelFont {
+    padding-right: 34px; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 52%, calc(100% - 13px) 52%;
+    background-size: 5px 5px; background-repeat: no-repeat;
+  }
+  .label-count {
+    position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+    font-size: 0.68rem; color: var(--muted); pointer-events: none;
+  }
+  .label-row { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .label-row > span, .label-row > label { font-size: 0.75rem; font-weight: 500; color: var(--muted); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .swatch {
+    width: 32px; height: 32px; border-radius: 50%; cursor: pointer; padding: 0;
+    border: 1.5px solid rgba(0,0,0,0.18); touch-action: manipulation;
+  }
+  .swatch.active { outline: 3px solid var(--orange); outline-offset: 2px; }
+  .swatch-custom {
+    position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;
+    background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); color: #fff;
+    font-size: 0.9rem; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  }
+  .swatch-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; }
+  .label-preview { margin-top: 14px; }
+  .label-preview svg { display: block; width: 100%; height: auto; border-radius: var(--radius); }
+  .label-preview-caption { font-size: 0.68rem; color: var(--muted); text-align: center; margin-top: 6px; }
   .drive-disconnect {
     margin-top: 10px; background: none; border: none; padding: 0; cursor: pointer;
     font-family: 'DM Sans', sans-serif; font-size: 0.75rem; color: var(--muted); text-decoration: underline;
@@ -158,6 +197,28 @@
       <p class="drive-status" id="driveStatus">Checking your Google Drive connection…</p>
       <button class="btn-large" id="driveConnectBtn" style="display:none;">Connect Google Drive</button>
       <button class="drive-disconnect" id="driveDisconnectBtn" type="button" style="display:none;">Disconnect Google Drive</button>
+
+      <div class="photo-label" id="photoLabelSection" style="display:none;">
+        <p class="label-heading">Event title on photos</p>
+        <p class="label-hint">Added to every photo saved to your Drive. Players' own phones keep the plain photo. Leave empty for no title.</p>
+        <div class="label-input-wrap">
+          <input type="text" id="labelTitle" maxlength="40" placeholder="e.g. Sec 3 Orientation 2026" autocomplete="off">
+          <span class="label-count" id="labelCount">0/40</span>
+        </div>
+        <div class="label-row">
+          <label for="labelFont">Font</label>
+          <select id="labelFont"></select>
+        </div>
+        <div class="label-row">
+          <span id="labelColorHeading">Colour</span>
+          <div class="swatches" id="labelSwatches" role="radiogroup" aria-labelledby="labelColorHeading"></div>
+        </div>
+        <div class="label-preview">
+          <div id="labelPreview"></div>
+          <p class="label-preview-caption">Sample — how the title will look on a photo in your Drive</p>
+        </div>
+        <button class="btn-large" id="labelSaveBtn" type="button" disabled>Save photo title</button>
+      </div>
     </div>
 
     <div class="card" id="sessionCard">
@@ -193,6 +254,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="config.js"></script>
+<script src="photo-label.js"></script>
 <script>
 let currentShareUrl = null;
 
@@ -551,6 +613,110 @@ function initDriveCard(isGuest) {
   checkDriveStatus();
 }
 
+// ── Event title drawn onto Drive photos (see photo-label.js) ──
+let labelState = normalizePhotoLabel(null);
+let savedLabelJson = JSON.stringify(labelState);
+
+async function renderLabelPreview() {
+  const box = document.getElementById('labelPreview');
+  box.innerHTML = photoLabelSvg(labelState);
+  // Measured sizes depend on the font being loaded — redraw once it is.
+  const wanted = JSON.stringify(labelState);
+  await loadPhotoFont(labelState.font, labelState.title);
+  if (wanted === JSON.stringify(labelState)) box.innerHTML = photoLabelSvg(labelState);
+}
+
+function renderLabelControls() {
+  document.getElementById('labelTitle').value = labelState.title;
+  document.getElementById('labelCount').textContent = labelState.title.length + '/' + PHOTO_TITLE_MAX;
+  document.getElementById('labelFont').value = labelState.font;
+  const sw = document.getElementById('labelSwatches');
+  sw.innerHTML = '';
+  const isPreset = PHOTO_COLORS.includes(labelState.color);
+  PHOTO_COLORS.forEach(c => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'swatch' + (c === labelState.color ? ' active' : '');
+    b.style.background = c;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', c === labelState.color ? 'true' : 'false');
+    b.setAttribute('aria-label', 'Colour ' + c);
+    b.addEventListener('click', () => updateLabel({ color: c }));
+    sw.appendChild(b);
+  });
+  const custom = document.createElement('label');
+  custom.className = 'swatch swatch-custom' + (isPreset ? '' : ' active');
+  custom.title = 'Custom colour';
+  if (!isPreset) custom.style.background = labelState.color;
+  custom.innerHTML = (isPreset ? '+' : '') + `<input type="color" aria-label="Custom colour" value="${labelState.color}">`;
+  custom.querySelector('input').addEventListener('input', e => updateLabel({ color: e.target.value }, true));
+  custom.querySelector('input').addEventListener('change', () => renderLabelControls());
+  sw.appendChild(custom);
+  document.getElementById('labelSaveBtn').disabled = JSON.stringify(labelState) === savedLabelJson;
+}
+
+// skipControls: while dragging in the colour picker, don't rebuild the picker itself.
+function updateLabel(patch, skipControls) {
+  labelState = normalizePhotoLabel({ ...labelState, ...patch });
+  if (!skipControls) renderLabelControls();
+  document.getElementById('labelSaveBtn').disabled = JSON.stringify(labelState) === savedLabelJson;
+  renderLabelPreview();
+}
+
+async function initPhotoLabel(userId) {
+  document.getElementById('photoLabelSection').style.display = 'block';
+  const fontSel = document.getElementById('labelFont');
+  Object.entries(PHOTO_FONTS).forEach(([key, f]) => {
+    const o = document.createElement('option');
+    o.value = key;
+    o.textContent = f.label;
+    o.style.fontFamily = `"${f.family}", sans-serif`;
+    fontSel.appendChild(o);
+  });
+  fontSel.addEventListener('change', () => updateLabel({ font: fontSel.value }));
+
+  const titleInput = document.getElementById('labelTitle');
+  titleInput.addEventListener('input', () => {
+    // Keep the caret where it is: only update count/preview, not the input's value.
+    labelState = normalizePhotoLabel({ ...labelState, title: titleInput.value });
+    document.getElementById('labelCount').textContent = titleInput.value.length + '/' + PHOTO_TITLE_MAX;
+    document.getElementById('labelSaveBtn').disabled = JSON.stringify(labelState) === savedLabelJson;
+    renderLabelPreview();
+  });
+
+  document.getElementById('labelSaveBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('labelSaveBtn');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      const { error } = await sb.from('host_photo_settings').upsert({
+        user_id: userId, ...labelState, updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+      if (error) throw error;
+      savedLabelJson = JSON.stringify(labelState);
+      renderLabelControls();
+      showToast(labelState.title ? '✓ Photo title saved' : '✓ Photo title removed');
+    } catch (e) {
+      console.error('Saving photo title failed:', e);
+      btn.disabled = false;
+      showToast('✗ Could not save photo title — check connection');
+    }
+    btn.textContent = 'Save photo title';
+  });
+
+  try {
+    const { data, error } = await sb.from('host_photo_settings')
+      .select('title, font, color').eq('user_id', userId).maybeSingle();
+    if (error) throw error;
+    if (data) labelState = normalizePhotoLabel(data);
+  } catch (e) {
+    console.error('Loading photo title failed:', e);
+  }
+  savedLabelJson = JSON.stringify(labelState);
+  renderLabelControls();
+  renderLabelPreview();
+}
+
 async function initApp(session) {
   appInitialized = true;
   const isGuest = !!session.user.is_anonymous;
@@ -610,6 +776,7 @@ async function initApp(session) {
   });
 
   initDriveCard(isGuest);
+  if (!isGuest) initPhotoLabel(session.user.id);
   await loadPhrases(session.user.id, isGuest);
 }
 
