@@ -596,16 +596,110 @@ function encodeJpeg(src, maxLong, quality, maxShort = maxLong) {
   }, 'image/jpeg', quality));
 }
 
+// ── Background photo worker (photo-worker.js) ──
+// Encodes on its own thread: steady timings, and the page stays responsive. Falls back
+// to encoding on the page (preparePhotoOnPage) where workers can't do this.
+const photoWorker = {
+  worker: null,
+  broken: false,
+  jobs: new Map(), // id → { resolvers: [ {resolve, reject} per size ] }
+  nextId: 1,
+  supported() {
+    return !this.broken && typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined';
+  },
+  start() {
+    if (this.worker || !this.supported()) return;
+    try {
+      this.worker = new Worker('photo-worker.js');
+      this.worker.onmessage = e => {
+        const { id, index, blob, error } = e.data;
+        const job = this.jobs.get(id);
+        if (!job) return;
+        if (error) {
+          job.resolvers.forEach(r => r.reject(new Error(error)));
+          this.jobs.delete(id);
+          return;
+        }
+        job.resolvers[index].resolve(blob);
+        if (index === job.resolvers.length - 1) this.jobs.delete(id);
+      };
+      this.worker.onerror = () => this.reset(true);
+    } catch (e) {
+      this.reset(true);
+    }
+  },
+  // Stops whatever it's doing (e.g. a photo that's been replaced by a retake).
+  reset(broken = false) {
+    if (this.worker) this.worker.terminate();
+    this.worker = null;
+    if (broken) this.broken = true;
+    this.jobs.forEach(job => job.resolvers.forEach(r => r.reject(new Error('cancelled'))));
+    this.jobs.clear();
+  },
+  busy() { return this.jobs.size > 0; },
+  // → one promise per size, each settling as soon as that copy is ready.
+  encode(file, sizes) {
+    this.start();
+    const id = this.nextId++;
+    const resolvers = [];
+    const promises = sizes.map(() => new Promise((resolve, reject) => resolvers.push({ resolve, reject })));
+    promises.forEach(p => p.catch(() => {}));
+    this.jobs.set(id, { resolvers });
+    this.worker.postMessage({ id, file, sizes });
+    return promises;
+  },
+};
+// Load the worker while the player is still looking at the board, not on their first photo.
+(window.requestIdleCallback || (fn => setTimeout(fn, 1500)))(() => photoWorker.start());
+
+// → { view, thumb, fullPromise } as soon as the small copies are ready, so the preview
+// shows quickly. The full-size copy for Drive is made last and carries on in the
+// background while the player looks at the preview: fullPromise → Blob, or null.
 async function preparePhoto(file) {
-  const src = await decodeImage(file);
-  try {
-    const full = uploadsEnabled ? await encodeJpeg(src, UPLOAD_MAX_LONG, 0.85, UPLOAD_MAX_SHORT) : null;
-    const view = await encodeJpeg(src, VIEW_MAX_EDGE, 0.82);
-    const thumb = await encodeJpeg(src, THUMB_MAX_EDGE, 0.7);
-    return { full, view, thumb };
-  } finally {
-    if (src.close) src.close();
+  if (photoWorker.supported()) {
+    // A previous photo still being processed has just been replaced (retake): drop it.
+    if (photoWorker.busy()) photoWorker.reset();
+    photoWorker.start();
+    if (photoWorker.worker) {
+      const sizes = [[VIEW_MAX_EDGE, 0.82, VIEW_MAX_EDGE], [THUMB_MAX_EDGE, 0.7, THUMB_MAX_EDGE]];
+      if (uploadsEnabled) sizes.push([UPLOAD_MAX_LONG, 0.85, UPLOAD_MAX_SHORT]);
+      const [viewP, thumbP, fullP] = photoWorker.encode(file, sizes);
+      try {
+        const view = await viewP;
+        const thumb = await thumbP;
+        return { view, thumb, fullPromise: fullP || Promise.resolve(null) };
+      } catch (e) {
+        if (e.message === 'cancelled') throw e; // replaced by a newer photo
+        // e.g. an older browser whose workers can't draw images: use the page instead.
+        console.warn('Photo worker failed, encoding on the page:', e);
+        photoWorker.reset(true);
+      }
+    }
   }
+  return preparePhotoOnPage(file);
+}
+
+async function preparePhotoOnPage(file) {
+  const src = await decodeImage(file);
+  const done = () => { if (src.close) src.close(); };
+  let view, thumb;
+  try {
+    view = await encodeJpeg(src, VIEW_MAX_EDGE, 0.82);
+    thumb = await encodeJpeg(src, THUMB_MAX_EDGE, 0.7);
+  } catch (e) {
+    done();
+    throw e;
+  }
+  // encodeJpeg resizes synchronously (it blocks the page while drawing), so only start
+  // the full-size copy after the preview with "Use photo" has been drawn on screen:
+  // requestAnimationFrame runs just before the next paint, the timeout just after it.
+  const fullPromise = uploadsEnabled
+    ? new Promise(res => requestAnimationFrame(() => setTimeout(res, 50)))
+        .then(() => encodeJpeg(src, UPLOAD_MAX_LONG, 0.85, UPLOAD_MAX_SHORT))
+        .finally(done)
+    : (done(), Promise.resolve(null));
+  fullPromise.catch(() => {}); // handled when the photo is used
+  return { view, thumb, fullPromise };
 }
 
 // ── Capture sheet: Take photo → preview → Use photo / Retake ──
@@ -675,18 +769,33 @@ document.getElementById('cameraInput').addEventListener('change', async e => {
 
 async function usePhoto() {
   if (activeCell === null || !pendingPhoto) return;
-  document.getElementById('usePhotoBtn').disabled = true;
+  const btn = document.getElementById('usePhotoBtn');
+  btn.disabled = true;
   const i = activeCell;
+  const pending = pendingPhoto;
   const name = document.getElementById('noteInput').value.slice(0, 15);
+  // Usually finished already (it ran while the preview was showing).
+  let full;
+  try {
+    const label = btn.textContent;
+    const slow = setTimeout(() => { btn.textContent = 'Saving…'; }, 150);
+    try { full = await pending.fullPromise; } finally { clearTimeout(slow); btn.textContent = label; }
+  } catch (e) {
+    console.error('Full-size photo failed:', e);
+    btn.disabled = false;
+    showToast("Couldn't process that photo — please retake it.");
+    return;
+  }
+  if (activeCell !== i || pendingPhoto !== pending) return; // sheet closed / retaken meanwhile
   const rec = {
-    phrase: shuffled[i], name, view: pendingPhoto.view, thumb: pendingPhoto.thumb, takenAt: Date.now(),
-    upload: pendingPhoto.full,                          // full-size JPEG waiting to go to Drive
-    uploadState: pendingPhoto.full ? 'pending' : 'local',
+    phrase: shuffled[i], name, view: pending.view, thumb: pending.thumb, takenAt: Date.now(),
+    upload: full,                                       // full-size JPEG waiting to go to Drive
+    uploadState: full ? 'pending' : 'local',
     uploadError: null,
     driveFileId: photoRecs[i]?.driveFileId || null,     // a retake replaces the same Drive file
     // Caption for the Drive copy: next from the host's list, random font + colour.
     // A retake gets a fresh pick.
-    overlay: pendingPhoto.full && photoCaptions.length
+    overlay: full && photoCaptions.length
       ? randomCaptionStyle(nextCaption(photoCaptions, boardKey)) : null,
   };
   await PhotoStore.put(photoKey(i), rec);
