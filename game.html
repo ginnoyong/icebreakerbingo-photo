@@ -166,14 +166,6 @@
   padding: 14px 0 2px; font-size: 0.85rem; color: var(--muted);
 }
 .sheet-busy .spinner { width: 22px; height: 22px; border-width: 3px; }
-.camera-toggle { display: flex; gap: 6px; margin-top: 12px; }
-.camera-toggle button {
-  flex: 1; padding: 8px 6px; border-radius: 99px; cursor: pointer;
-  border: 1.5px solid var(--border); background: #fff; color: var(--muted);
-  font-family: 'DM Sans', sans-serif; font-size: 0.75rem; font-weight: 500;
-  touch-action: manipulation;
-}
-.camera-toggle button.active { border-color: var(--orange); background: var(--orange-lt); color: var(--orange-dk); font-weight: 700; }
 
 /* ── Photo viewer ── */
 .viewer {
@@ -261,10 +253,6 @@
       <span class="char-count" id="charCount">0/15</span>
     </div>
     <p class="photo-hint" id="photoHint">📷 Take a photo of your match to check this square.</p>
-    <div class="camera-toggle" id="cameraToggle" role="group" aria-label="Which camera opens">
-      <button type="button" data-cam="environment">📷 Back camera</button>
-      <button type="button" data-cam="user">🤳 Front camera</button>
-    </div>
     <div class="sheet-busy" id="sheetBusy"><div class="spinner"></div>Preparing photo…</div>
     <div class="sheet-actions" id="captureActions">
       <button class="btn btn-ghost" onclick="closeSheet()">Cancel</button>
@@ -544,6 +532,7 @@ async function reshuffleBoard() {
   const oldKey = boardKey;
   await PhotoStore.deleteBoard(oldKey + '|');
   clearProgress(oldKey);
+  try { localStorage.removeItem('bingo-photo:captionbag:' + oldKey); } catch (e) {}
   try {
     const url = new URL(window.location.href);
     url.searchParams.set('seed', Math.floor(Math.random() * 9999999));
@@ -664,7 +653,6 @@ function showSheetStep(step) { // 'capture' | 'busy' | 'preview'
   document.getElementById('photoPreview').style.display = step === 'preview' ? 'block' : 'none';
   document.getElementById('photoHint').style.display = step === 'capture' ? 'block' : 'none';
   document.getElementById('sheetBusy').style.display = step === 'busy' ? 'flex' : 'none';
-  document.getElementById('cameraToggle').style.display = step === 'busy' ? 'none' : 'flex';
   document.getElementById('captureActions').style.display = step === 'capture' ? 'flex' : 'none';
   document.getElementById('previewActions').style.display = step === 'preview' ? 'flex' : 'none';
 }
@@ -690,23 +678,6 @@ function closeSheet() {
 function handleOverlayClick(e) {
   if (e.target === document.getElementById('overlay')) closeSheet();
 }
-
-// Which camera the phone opens first: 'environment' (back) or 'user' (front). The page
-// can't switch cameras once the phone's camera app is open (that app has its own flip
-// button) — this just picks the starting camera, and is remembered on this phone.
-const CAMERA_PREF_KEY = 'bingo-photo:camera';
-function setCamera(facing) {
-  if (facing !== 'user') facing = 'environment';
-  document.getElementById('cameraInput').setAttribute('capture', facing);
-  document.querySelectorAll('#cameraToggle button').forEach(b => {
-    const on = b.dataset.cam === facing;
-    b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
-  try { localStorage.setItem(CAMERA_PREF_KEY, facing); } catch (e) {}
-}
-document.querySelectorAll('#cameraToggle button').forEach(b => b.addEventListener('click', () => setCamera(b.dataset.cam)));
-setCamera((() => { try { return localStorage.getItem(CAMERA_PREF_KEY); } catch (e) { return null; } })());
 
 // Must run straight from a tap — browsers only open the camera on a user gesture.
 function takePhoto() {
@@ -745,6 +716,10 @@ async function usePhoto() {
     uploadState: pendingPhoto.full ? 'pending' : 'local',
     uploadError: null,
     driveFileId: photoRecs[i]?.driveFileId || null,     // a retake replaces the same Drive file
+    // Caption for the Drive copy: next from the host's list, random font + colour.
+    // A retake gets a fresh pick.
+    overlay: pendingPhoto.full && photoCaptions.length
+      ? randomCaptionStyle(nextCaption(photoCaptions, boardKey)) : null,
   };
   await PhotoStore.put(photoKey(i), rec);
   setPhoto(i, rec);
@@ -767,17 +742,17 @@ let uploadRunning = false;
 let retryTimer = null;
 let retryDelay = 5000;
 let warnedNotConnected = false;
-let photoLabel = null; // host's event title / font / colour (photo-label.js), from the session
+let photoCaptions = []; // host's approved captions (photo-label.js), from the session
 
-// The clean full-size photo stays on the phone; the host's event title is drawn onto
-// the copy only as it's sent, so retakes and queued uploads always use the latest title.
-// If drawing fails for any reason, the plain photo is sent rather than nothing.
+// The clean full-size photo stays on the phone; the photo's caption (chosen in
+// usePhoto, saved as rec.overlay) is drawn onto the copy only as it's sent, so upload
+// retries look the same. If drawing fails, the plain photo is sent rather than nothing.
 async function photoForUpload(rec) {
-  if (!photoLabel || !photoLabel.title) return rec.upload;
+  if (!rec.overlay || !rec.overlay.title) return rec.upload;
   try {
-    return await composeLabelledPhoto(rec.upload, photoLabel);
+    return await composeLabelledPhoto(rec.upload, rec.overlay);
   } catch (e) {
-    console.error('Adding photo title failed — uploading plain photo:', e);
+    console.error('Adding photo caption failed — uploading plain photo:', e);
     return rec.upload;
   }
 }
@@ -1151,10 +1126,7 @@ async function loadPhrases() {
       // A real session with the host's own phrases — photos can go to their Drive.
       sessionId = sessionIdParam;
       uploadsEnabled = true;
-      if (data.photo_label && data.photo_label.title) {
-        photoLabel = normalizePhotoLabel(data.photo_label);
-        loadPhotoFont(photoLabel.font, photoLabel.title); // warm up before the first upload
-      }
+      photoCaptions = normalizeCaptions(data.photo_captions);
       return data.phrases;
     }
   } catch (e) {}

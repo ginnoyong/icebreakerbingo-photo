@@ -21,3 +21,9 @@ entrypoint = "./functions/store-drive-token/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/upload-photo/index.ts"
+
+# Host-only: suggests photo captions (with emoji) for a theme, via Groq.
+[functions.generate-captions]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/generate-captions/index.ts"

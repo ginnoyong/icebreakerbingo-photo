@@ -1,7 +1,9 @@
-// Photo label — the host's event title drawn onto every photo saved to their Google Drive.
+// Photo label — a caption drawn onto every photo saved to the host's Google Drive.
+// The host saves a list of captions; each photo gets one of them (each used once before
+// any repeats) in a random font and colour — see the "Random captions" section below.
 //
-// Shared by dashboard.html (SVG preview under the settings) and game.html (drawn onto
-// the full-size photo on a canvas just before upload). Both use layoutPhotoLabel(), so
+// Shared by dashboard.html (SVG sample) and game.html (drawn onto the full-size photo on
+// a canvas just before upload). Both use layoutPhotoLabel(), so
 // the preview matches the real result: every size is relative to the photo's shorter
 // edge (u = min(w, h) / 1000), which keeps the look identical for landscape, portrait,
 // square, large or small photos.
@@ -223,4 +225,68 @@ function photoLabelSvg(label, w = 800, h = 600) {
     <g font-family="&quot;${f.family}&quot;, sans-serif" font-weight="${f.weight}" font-size="${L.px.toFixed(1)}"
        fill="${label.color}" text-anchor="middle" filter="url(#plShadow)">${text}</g>
   </svg>`;
+}
+
+// ── Random captions ──
+const CAPTION_MAX = 30;        // visible characters (emoji count as one)
+const CAPTIONS_MAX_COUNT = 20; // matches captions_are_valid() in photo-captions.sql
+
+const _graphemes = (typeof Intl !== 'undefined' && Intl.Segmenter)
+  ? new Intl.Segmenter('en', { granularity: 'grapheme' }) : null;
+function captionLength(s) {
+  return _graphemes ? [..._graphemes.segment(s)].length : Array.from(s).length;
+}
+
+// Trim, drop empties/over-long ones, remove duplicates, cap the count.
+function normalizeCaptions(list) {
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach(c => {
+    if (typeof c !== 'string') return;
+    const s = c.replace(/\s+/g, ' ').trim();
+    if (!s || captionLength(s) > CAPTION_MAX || s.length > 40) return;
+    const key = s.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(s);
+  });
+  return out.slice(0, CAPTIONS_MAX_COUNT);
+}
+
+function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// Next caption for this board, using each caption once before any repeats. The
+// remaining "bag" is kept in localStorage per board, so it survives reloads; captions
+// the host has since removed are skipped, new ones join when the bag refills.
+function nextCaption(captions, bagKey) {
+  if (!captions.length) return null;
+  const storeKey = 'bingo-photo:captionbag:' + bagKey;
+  let bag = [];
+  let last = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(storeKey) || 'null');
+    if (saved && Array.isArray(saved.bag)) { bag = saved.bag; last = saved.last || null; }
+  } catch (e) {}
+  bag = bag.filter(c => captions.includes(c));
+  if (!bag.length) {
+    bag = captions.slice();
+    for (let i = bag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [bag[i], bag[j]] = [bag[j], bag[i]];
+    }
+    // Don't start a new round with the caption that just ended the last one.
+    if (bag.length > 1 && bag[0] === last) bag.push(bag.shift());
+  }
+  const caption = bag.shift();
+  try { localStorage.setItem(storeKey, JSON.stringify({ bag, last: caption })); } catch (e) {}
+  return caption;
+}
+
+// A complete overlay style: { title, font, color } — the shape drawPhotoLabel() takes.
+function randomCaptionStyle(caption) {
+  return normalizePhotoLabel({
+    title: caption,
+    font: randomItem(Object.keys(PHOTO_FONTS)),
+    color: randomItem(PHOTO_COLORS),
+  });
 }

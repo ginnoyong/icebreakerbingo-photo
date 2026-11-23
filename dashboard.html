@@ -94,45 +94,52 @@
   .drive-status { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
   .drive-status.ok { color: var(--text); }
   .drive-status b { color: var(--text); }
-  /* Event title drawn onto Drive photos */
+  /* Random captions drawn onto Drive photos */
   .photo-label { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
   .label-heading { font-family: 'Syne', sans-serif; font-size: 0.85rem; font-weight: 700; color: var(--orange); }
   .label-hint { font-size: 0.72rem; color: var(--muted); line-height: 1.45; margin: 4px 0 10px; }
-  .label-input-wrap { position: relative; }
-  #labelTitle, #labelFont {
+  #captionTheme {
     width: 100%; border: 1.5px solid var(--border); border-radius: var(--radius);
     padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 0.95rem;
     outline: none; color: var(--text); background: var(--card); appearance: none;
   }
-  #labelTitle { padding-right: 52px; }
-  #labelTitle:focus, #labelFont:focus { border-color: var(--orange); }
-  #labelFont {
-    padding-right: 34px; cursor: pointer;
-    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-    background-position: calc(100% - 18px) 52%, calc(100% - 13px) 52%;
-    background-size: 5px 5px; background-repeat: no-repeat;
+  #captionTheme:focus { border-color: var(--orange); }
+  #captionGenerateBtn {
+    width: 100%; margin-top: 8px; padding: 12px; border-radius: 12px; cursor: pointer;
+    border: 1.5px solid var(--orange); background: var(--orange-lt); color: var(--orange-dk);
+    font-family: 'Syne', sans-serif; font-weight: 800; font-size: 0.85rem; touch-action: manipulation;
   }
-  .label-count {
-    position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-    font-size: 0.68rem; color: var(--muted); pointer-events: none;
+  #captionGenerateBtn:active { transform: scale(0.98); }
+  #captionGenerateBtn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+  .caption-list { list-style: none; margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .caption-row { display: flex; gap: 6px; align-items: center; }
+  .caption-row input {
+    flex: 1; min-width: 0; border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; font-family: 'DM Sans', sans-serif; font-size: 0.9rem;
+    outline: none; color: var(--text); background: var(--card);
   }
-  .label-row { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
-  .label-row > span, .label-row > label { font-size: 0.75rem; font-weight: 500; color: var(--muted); }
-  .swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .swatch {
-    width: 32px; height: 32px; border-radius: 50%; cursor: pointer; padding: 0;
-    border: 1.5px solid rgba(0,0,0,0.18); touch-action: manipulation;
+  .caption-row input:focus { border-color: var(--orange); }
+  .caption-row input.too-long { border-color: #E24B4A; }
+  .caption-del {
+    width: 34px; height: 34px; flex-shrink: 0; border-radius: 50%; cursor: pointer;
+    border: 1.5px solid var(--border); background: var(--card); color: var(--muted); font-size: 0.85rem;
   }
-  .swatch.active { outline: 3px solid var(--orange); outline-offset: 2px; }
-  .swatch-custom {
-    position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;
-    background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); color: #fff;
-    font-size: 0.9rem; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  .caption-empty { font-size: 0.78rem; color: var(--muted); text-align: center; padding: 10px; line-height: 1.4; }
+  .caption-add {
+    width: 100%; margin-top: 8px; padding: 9px; border-radius: 10px; cursor: pointer;
+    background: none; border: 1.5px dashed var(--border); color: var(--muted);
+    font-family: 'DM Sans', sans-serif; font-size: 0.82rem;
   }
-  .swatch-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; }
+  .caption-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .label-preview { margin-top: 14px; }
   .label-preview svg { display: block; width: 100%; height: auto; border-radius: var(--radius); }
-  .label-preview-caption { font-size: 0.68rem; color: var(--muted); text-align: center; margin-top: 6px; }
+  .preview-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; }
+  .label-preview-caption { font-size: 0.68rem; color: var(--muted); }
+  .shuffle-btn {
+    flex-shrink: 0; padding: 6px 12px; border-radius: 99px; cursor: pointer;
+    border: 1.5px solid var(--border); background: var(--card); color: var(--text);
+    font-family: 'DM Sans', sans-serif; font-size: 0.78rem; font-weight: 500;
+  }
   .drive-disconnect {
     margin-top: 10px; background: none; border: none; padding: 0; cursor: pointer;
     font-family: 'DM Sans', sans-serif; font-size: 0.75rem; color: var(--muted); text-decoration: underline;
@@ -199,25 +206,20 @@
       <button class="drive-disconnect" id="driveDisconnectBtn" type="button" style="display:none;">Disconnect Google Drive</button>
 
       <div class="photo-label" id="photoLabelSection" style="display:none;">
-        <p class="label-heading">Event title on photos</p>
-        <p class="label-hint">Added to every photo saved to your Drive. Players' own phones keep the plain photo. Leave empty for no title.</p>
-        <div class="label-input-wrap">
-          <input type="text" id="labelTitle" maxlength="40" placeholder="e.g. Sec 3 Orientation 2026" autocomplete="off">
-          <span class="label-count" id="labelCount">0/40</span>
-        </div>
-        <div class="label-row">
-          <label for="labelFont">Font</label>
-          <select id="labelFont"></select>
-        </div>
-        <div class="label-row">
-          <span id="labelColorHeading">Colour</span>
-          <div class="swatches" id="labelSwatches" role="radiogroup" aria-labelledby="labelColorHeading"></div>
-        </div>
+        <p class="label-heading">Random captions on photos</p>
+        <p class="label-hint">Each photo saved to your Drive gets one of these captions, in a random font and colour. Players' own phones keep the plain photo. Leave the list empty for no captions.</p>
+        <input type="text" id="captionTheme" maxlength="100" placeholder="Theme, e.g. Sec 3 camp at Pulau Ubin" autocomplete="off">
+        <button type="button" id="captionGenerateBtn">✨ Suggest 10 captions</button>
+        <ul class="caption-list" id="captionList"></ul>
+        <button type="button" class="caption-add" id="captionAddBtn">+ Add your own</button>
         <div class="label-preview">
           <div id="labelPreview"></div>
-          <p class="label-preview-caption">Sample — how the title will look on a photo in your Drive</p>
+          <div class="preview-actions">
+            <p class="label-preview-caption">Sample — one random caption, font and colour</p>
+            <button type="button" class="shuffle-btn" id="captionShuffleBtn">🎲 Shuffle</button>
+          </div>
         </div>
-        <button class="btn-large" id="labelSaveBtn" type="button" disabled>Save photo title</button>
+        <button class="btn-large" id="labelSaveBtn" type="button" disabled>Save captions</button>
       </div>
     </div>
 
@@ -613,108 +615,146 @@ function initDriveCard(isGuest) {
   checkDriveStatus();
 }
 
-// ── Event title drawn onto Drive photos (see photo-label.js) ──
-let labelState = normalizePhotoLabel(null);
-let savedLabelJson = JSON.stringify(labelState);
+// ── Random captions drawn onto Drive photos (see photo-label.js) ──
+let captionRows = [];        // the editable list, as typed
+let savedCaptionsJson = '';
+let sampleStyle = normalizePhotoLabel(null);
+
+const captionTooLong = c => captionLength(c.trim()) > CAPTION_MAX;
+function captionsState() {
+  return JSON.stringify({
+    theme: document.getElementById('captionTheme').value.trim(),
+    captions: normalizeCaptions(captionRows),
+  });
+}
+function updateCaptionSaveBtn() {
+  document.getElementById('labelSaveBtn').disabled =
+    captionsState() === savedCaptionsJson || captionRows.some(captionTooLong);
+}
 
 async function renderLabelPreview() {
   const box = document.getElementById('labelPreview');
-  box.innerHTML = photoLabelSvg(labelState);
+  const style = sampleStyle;
+  box.innerHTML = photoLabelSvg(style);
   // Measured sizes depend on the font being loaded — redraw once it is.
-  const wanted = JSON.stringify(labelState);
-  await loadPhotoFont(labelState.font, labelState.title);
-  if (wanted === JSON.stringify(labelState)) box.innerHTML = photoLabelSvg(labelState);
+  await loadPhotoFont(style.font, style.title);
+  if (style === sampleStyle) box.innerHTML = photoLabelSvg(style);
 }
 
-function renderLabelControls() {
-  document.getElementById('labelTitle').value = labelState.title;
-  document.getElementById('labelCount').textContent = labelState.title.length + '/' + PHOTO_TITLE_MAX;
-  document.getElementById('labelFont').value = labelState.font;
-  const sw = document.getElementById('labelSwatches');
-  sw.innerHTML = '';
-  const isPreset = PHOTO_COLORS.includes(labelState.color);
-  PHOTO_COLORS.forEach(c => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'swatch' + (c === labelState.color ? ' active' : '');
-    b.style.background = c;
-    b.setAttribute('role', 'radio');
-    b.setAttribute('aria-checked', c === labelState.color ? 'true' : 'false');
-    b.setAttribute('aria-label', 'Colour ' + c);
-    b.addEventListener('click', () => updateLabel({ color: c }));
-    sw.appendChild(b);
-  });
-  const custom = document.createElement('label');
-  custom.className = 'swatch swatch-custom' + (isPreset ? '' : ' active');
-  custom.title = 'Custom colour';
-  if (!isPreset) custom.style.background = labelState.color;
-  custom.innerHTML = (isPreset ? '+' : '') + `<input type="color" aria-label="Custom colour" value="${labelState.color}">`;
-  custom.querySelector('input').addEventListener('input', e => updateLabel({ color: e.target.value }, true));
-  custom.querySelector('input').addEventListener('change', () => renderLabelControls());
-  sw.appendChild(custom);
-  document.getElementById('labelSaveBtn').disabled = JSON.stringify(labelState) === savedLabelJson;
-}
-
-// skipControls: while dragging in the colour picker, don't rebuild the picker itself.
-function updateLabel(patch, skipControls) {
-  labelState = normalizePhotoLabel({ ...labelState, ...patch });
-  if (!skipControls) renderLabelControls();
-  document.getElementById('labelSaveBtn').disabled = JSON.stringify(labelState) === savedLabelJson;
+function newCaptionSample() {
+  const list = normalizeCaptions(captionRows);
+  sampleStyle = list.length ? randomCaptionStyle(randomItem(list)) : normalizePhotoLabel(null);
   renderLabelPreview();
+}
+
+function renderCaptionList() {
+  const ul = document.getElementById('captionList');
+  ul.innerHTML = '';
+  if (!captionRows.length) {
+    ul.innerHTML = '<li class="caption-empty">No captions yet — describe a theme and tap Suggest, or add your own.</li>';
+  }
+  captionRows.forEach((text, k) => {
+    const li = document.createElement('li');
+    li.className = 'caption-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 40;
+    input.value = text;
+    input.setAttribute('aria-label', 'Caption ' + (k + 1));
+    input.classList.toggle('too-long', captionTooLong(text));
+    input.addEventListener('input', () => {
+      captionRows[k] = input.value;
+      const tooLong = captionTooLong(input.value);
+      input.classList.toggle('too-long', tooLong);
+      input.title = tooLong ? 'Keep captions to ' + CAPTION_MAX + ' characters' : '';
+      updateCaptionSaveBtn();
+    });
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'caption-del';
+    del.textContent = '✕';
+    del.setAttribute('aria-label', 'Remove caption ' + (k + 1));
+    del.addEventListener('click', () => { captionRows.splice(k, 1); renderCaptionList(); newCaptionSample(); });
+    li.append(input, del);
+    ul.appendChild(li);
+  });
+  document.getElementById('captionAddBtn').disabled = captionRows.length >= CAPTIONS_MAX_COUNT;
+  updateCaptionSaveBtn();
+}
+
+async function suggestCaptions() {
+  const themeInput = document.getElementById('captionTheme');
+  const theme = themeInput.value.trim();
+  if (!theme) { showToast('Describe a theme first'); themeInput.focus(); return; }
+  if (normalizeCaptions(captionRows).length && !confirm('Replace your current captions with new suggestions?')) return;
+  const btn = document.getElementById('captionGenerateBtn');
+  btn.disabled = true;
+  btn.textContent = 'Thinking…';
+  try {
+    const { data, error } = await sb.functions.invoke('generate-captions', { body: { theme } });
+    if (error || !data || !Array.isArray(data.captions) || !data.captions.length) throw error || new Error('no captions');
+    captionRows = normalizeCaptions(data.captions);
+    renderCaptionList();
+    newCaptionSample();
+    showToast('✓ ' + captionRows.length + ' suggestions — edit or remove any, then Save');
+  } catch (e) {
+    console.error('Caption suggestions failed:', e);
+    showToast('✗ Could not get suggestions — please try again');
+  }
+  btn.disabled = false;
+  btn.textContent = '✨ Suggest 10 captions';
 }
 
 async function initPhotoLabel(userId) {
   document.getElementById('photoLabelSection').style.display = 'block';
-  const fontSel = document.getElementById('labelFont');
-  Object.entries(PHOTO_FONTS).forEach(([key, f]) => {
-    const o = document.createElement('option');
-    o.value = key;
-    o.textContent = f.label;
-    o.style.fontFamily = `"${f.family}", sans-serif`;
-    fontSel.appendChild(o);
-  });
-  fontSel.addEventListener('change', () => updateLabel({ font: fontSel.value }));
-
-  const titleInput = document.getElementById('labelTitle');
-  titleInput.addEventListener('input', () => {
-    // Keep the caret where it is: only update count/preview, not the input's value.
-    labelState = normalizePhotoLabel({ ...labelState, title: titleInput.value });
-    document.getElementById('labelCount').textContent = titleInput.value.length + '/' + PHOTO_TITLE_MAX;
-    document.getElementById('labelSaveBtn').disabled = JSON.stringify(labelState) === savedLabelJson;
-    renderLabelPreview();
+  document.getElementById('captionTheme').addEventListener('input', updateCaptionSaveBtn);
+  document.getElementById('captionGenerateBtn').addEventListener('click', suggestCaptions);
+  document.getElementById('captionShuffleBtn').addEventListener('click', newCaptionSample);
+  document.getElementById('captionAddBtn').addEventListener('click', () => {
+    if (captionRows.length >= CAPTIONS_MAX_COUNT) return;
+    captionRows.push('');
+    renderCaptionList();
+    const inputs = document.querySelectorAll('#captionList input');
+    inputs[inputs.length - 1].focus();
   });
 
   document.getElementById('labelSaveBtn').addEventListener('click', async () => {
     const btn = document.getElementById('labelSaveBtn');
+    const captions = normalizeCaptions(captionRows);
+    const theme = document.getElementById('captionTheme').value.trim().slice(0, 100);
     btn.disabled = true;
     btn.textContent = 'Saving…';
     try {
       const { error } = await sb.from('host_photo_settings').upsert({
-        user_id: userId, ...labelState, updated_at: new Date().toISOString(),
+        user_id: userId, caption_theme: theme, captions, updated_at: new Date().toISOString(),
       }, { onConflict: 'user_id' });
       if (error) throw error;
-      savedLabelJson = JSON.stringify(labelState);
-      renderLabelControls();
-      showToast(labelState.title ? '✓ Photo title saved' : '✓ Photo title removed');
+      captionRows = captions.slice(); // drop blanks/duplicates the host left behind
+      savedCaptionsJson = captionsState();
+      renderCaptionList();
+      showToast(captions.length ? '✓ ' + captions.length + ' captions saved' : '✓ Captions removed');
     } catch (e) {
-      console.error('Saving photo title failed:', e);
-      btn.disabled = false;
-      showToast('✗ Could not save photo title — check connection');
+      console.error('Saving captions failed:', e);
+      showToast('✗ Could not save captions — check connection');
     }
-    btn.textContent = 'Save photo title';
+    btn.textContent = 'Save captions';
+    updateCaptionSaveBtn();
   });
 
   try {
     const { data, error } = await sb.from('host_photo_settings')
-      .select('title, font, color').eq('user_id', userId).maybeSingle();
+      .select('caption_theme, captions').eq('user_id', userId).maybeSingle();
     if (error) throw error;
-    if (data) labelState = normalizePhotoLabel(data);
+    if (data) {
+      document.getElementById('captionTheme').value = data.caption_theme || '';
+      captionRows = normalizeCaptions(data.captions);
+    }
   } catch (e) {
-    console.error('Loading photo title failed:', e);
+    console.error('Loading captions failed:', e);
   }
-  savedLabelJson = JSON.stringify(labelState);
-  renderLabelControls();
-  renderLabelPreview();
+  savedCaptionsJson = captionsState();
+  renderCaptionList();
+  newCaptionSample();
 }
 
 async function initApp(session) {
