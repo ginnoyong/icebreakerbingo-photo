@@ -596,17 +596,43 @@ function encodeJpeg(src, maxLong, quality, maxShort = maxLong) {
   }, 'image/jpeg', quality));
 }
 
+// Returns as soon as the small copies are ready, so the preview shows quickly. The
+// full-size copy for Drive (the slowest step) carries on in the background while the
+// player looks at the preview / types a name: fullPromise → Blob, or null if not needed.
 async function preparePhoto(file) {
   const src = await decodeImage(file);
+  const done = () => { if (src.close) src.close(); };
+  let view, thumb;
   try {
-    const full = uploadsEnabled ? await encodeJpeg(src, UPLOAD_MAX_LONG, 0.85, UPLOAD_MAX_SHORT) : null;
-    const view = await encodeJpeg(src, VIEW_MAX_EDGE, 0.82);
-    const thumb = await encodeJpeg(src, THUMB_MAX_EDGE, 0.7);
-    return { full, view, thumb };
-  } finally {
-    if (src.close) src.close();
+    view = await encodeJpeg(src, VIEW_MAX_EDGE, 0.82);
+    thumb = await encodeJpeg(src, THUMB_MAX_EDGE, 0.7);
+  } catch (e) {
+    done();
+    throw e;
   }
+  const fullPromise = uploadsEnabled
+    ? encodeJpeg(src, UPLOAD_MAX_LONG, 0.85, UPLOAD_MAX_SHORT).finally(done)
+    : (done(), Promise.resolve(null));
+  fullPromise.catch(() => {}); // handled when the photo is used
+  return { view, thumb, fullPromise };
 }
+
+// The first JPEG decode/encode on a page is noticeably slower than later ones (the
+// browser sets its image codecs up on first use). Do that once, on a tiny image, while
+// the player is still looking at the board — not after they've taken their first photo.
+function warmUpPhotoCodecs() {
+  try {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#E8521A';
+    ctx.fillRect(0, 0, 64, 64);
+    c.toBlob(blob => {
+      if (blob) decodeImage(blob).then(src => encodeJpeg(src, 32, 0.8).finally(() => src.close && src.close())).catch(() => {});
+    }, 'image/jpeg', 0.8);
+  } catch (e) {}
+}
+(window.requestIdleCallback || (fn => setTimeout(fn, 1500)))(warmUpPhotoCodecs);
 
 // ── Capture sheet: Take photo → preview → Use photo / Retake ──
 let pendingPhoto = null; // { view, thumb, previewUrl } — taken but not yet used
@@ -675,18 +701,33 @@ document.getElementById('cameraInput').addEventListener('change', async e => {
 
 async function usePhoto() {
   if (activeCell === null || !pendingPhoto) return;
-  document.getElementById('usePhotoBtn').disabled = true;
+  const btn = document.getElementById('usePhotoBtn');
+  btn.disabled = true;
   const i = activeCell;
+  const pending = pendingPhoto;
   const name = document.getElementById('noteInput').value.slice(0, 15);
+  // Usually finished already (it ran while the preview was showing).
+  let full;
+  try {
+    const label = btn.textContent;
+    const slow = setTimeout(() => { btn.textContent = 'Saving…'; }, 150);
+    try { full = await pending.fullPromise; } finally { clearTimeout(slow); btn.textContent = label; }
+  } catch (e) {
+    console.error('Full-size photo failed:', e);
+    btn.disabled = false;
+    showToast("Couldn't process that photo — please retake it.");
+    return;
+  }
+  if (activeCell !== i || pendingPhoto !== pending) return; // sheet closed / retaken meanwhile
   const rec = {
-    phrase: shuffled[i], name, view: pendingPhoto.view, thumb: pendingPhoto.thumb, takenAt: Date.now(),
-    upload: pendingPhoto.full,                          // full-size JPEG waiting to go to Drive
-    uploadState: pendingPhoto.full ? 'pending' : 'local',
+    phrase: shuffled[i], name, view: pending.view, thumb: pending.thumb, takenAt: Date.now(),
+    upload: full,                                       // full-size JPEG waiting to go to Drive
+    uploadState: full ? 'pending' : 'local',
     uploadError: null,
     driveFileId: photoRecs[i]?.driveFileId || null,     // a retake replaces the same Drive file
     // Caption for the Drive copy: next from the host's list, random font + colour.
     // A retake gets a fresh pick.
-    overlay: pendingPhoto.full && photoCaptions.length
+    overlay: full && photoCaptions.length
       ? randomCaptionStyle(nextCaption(photoCaptions, boardKey)) : null,
   };
   await PhotoStore.put(photoKey(i), rec);
