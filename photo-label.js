@@ -8,7 +8,7 @@
 // edge (u = min(w, h) / 1000), which keeps the look identical for landscape, portrait,
 // square, large or small photos.
 
-const PHOTO_TITLE_MAX = 40;
+const PHOTO_TITLE_MAX = 80; // code points
 
 // Keys must match the CHECK constraint in supabase/sql/photo-label.sql.
 const PHOTO_FONTS = {
@@ -37,7 +37,8 @@ const PHOTO_COLORS = ['#FFFFFF', '#1A1010', '#E8521A', '#FFD43B', '#3B5BDB', '#F
 function normalizePhotoLabel(raw) {
   const l = raw || {};
   return {
-    title: String(l.title || '').replace(/\s+/g, ' ').trim().slice(0, PHOTO_TITLE_MAX),
+    // Cut by code points (never mid-emoji); room for a caption plus its emoji on both sides.
+    title: Array.from(String(l.title || '').replace(/\s+/g, ' ').trim()).slice(0, PHOTO_TITLE_MAX).join(''),
     font: PHOTO_FONTS[l.font] ? l.font : 'syne',
     color: /^#[0-9a-f]{6}$/i.test(l.color || '') ? l.color.toUpperCase() : '#FFFFFF',
   };
@@ -113,6 +114,12 @@ function layoutPhotoLabel(w, h, label) {
   const maxW = w - 2 * 70 * u;
   let px = 80 * u;
   let lines = null;
+  // Prefer one line (keeps a caption's mirrored emoji level with each other), shrinking
+  // down to a still-readable size; only then allow two lines.
+  for (let size = 80; size >= 52 && !lines; size -= 4) {
+    px = size * u;
+    lines = wrapLabelWords(label.title, label.font, px, maxW, 1);
+  }
   for (let size = 80; size >= 40 && !lines; size -= 4) {
     px = size * u;
     lines = wrapLabelWords(label.title, label.font, px, maxW, 2);
@@ -228,29 +235,76 @@ function photoLabelSvg(label, w = 800, h = 600) {
 }
 
 // ── Random captions ──
-const CAPTION_MAX = 30;        // visible characters (emoji count as one)
+// A caption is { text, emojis }: emoji-free text plus a small set of emoji relevant to
+// it. Each photo shows 1–3 of those emoji (random) on the left and the same ones in
+// reverse order on the right, e.g. "🌴🚲 Pedal to the next match 🚲🌴".
+// Older saved captions were plain strings with emoji inside; they're converted here.
+const CAPTION_MAX = 30;        // visible characters of the text
+const CAPTION_EMOJI_MAX = 6;   // emoji kept per caption (each photo uses 1–3 of them)
 const CAPTIONS_MAX_COUNT = 20; // matches captions_are_valid() in photo-captions.sql
 
 const _graphemes = (typeof Intl !== 'undefined' && Intl.Segmenter)
   ? new Intl.Segmenter('en', { granularity: 'grapheme' }) : null;
-function captionLength(s) {
-  return _graphemes ? [..._graphemes.segment(s)].length : Array.from(s).length;
+function graphemesOf(s) {
+  return _graphemes ? [..._graphemes.segment(s)].map(g => g.segment) : Array.from(s);
+}
+function captionLength(s) { return graphemesOf(s).length; }
+
+// A grapheme cluster that's an emoji (incl. flags, keycaps, skin tones, ZWJ sequences).
+const EMOJI_RE = /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u;
+function isEmoji(g) { return EMOJI_RE.test(g); }
+
+// "🌴 Island vibes 🏝️" → { text: 'Island vibes', emojis: ['🌴', '🏝️'] }
+function splitEmojis(s) {
+  const emojis = [];
+  const text = graphemesOf(String(s || '')).filter(g => {
+    if (isEmoji(g)) { emojis.push(g); return false; }
+    return true;
+  }).join('').replace(/\s+/g, ' ').trim();
+  return { text, emojis };
 }
 
-// Trim, drop empties/over-long ones, remove duplicates, cap the count.
+function uniqueEmojis(list) {
+  return [...new Set(list)].slice(0, CAPTION_EMOJI_MAX);
+}
+
+// → clean [{ text, emojis }]: emoji moved out of the text, empties/over-long dropped,
+// duplicate texts removed, count capped.
 function normalizeCaptions(list) {
   const seen = new Set();
   const out = [];
   (Array.isArray(list) ? list : []).forEach(c => {
-    if (typeof c !== 'string') return;
-    const s = c.replace(/\s+/g, ' ').trim();
-    if (!s || captionLength(s) > CAPTION_MAX || s.length > 40) return;
-    const key = s.toLowerCase();
+    let text, emojis;
+    if (typeof c === 'string') {
+      ({ text, emojis } = splitEmojis(c));
+    } else if (c && typeof c === 'object') {
+      const t = splitEmojis(c.text);
+      const e = Array.isArray(c.emojis) ? c.emojis.join('') : String(c.emojis || '');
+      text = t.text;
+      emojis = [...t.emojis, ...splitEmojis(e).emojis];
+    } else {
+      return;
+    }
+    if (!text || captionLength(text) > CAPTION_MAX || text.length > 40) return;
+    const key = text.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    out.push(s);
+    out.push({ text, emojis: uniqueEmojis(emojis) });
   });
   return out.slice(0, CAPTIONS_MAX_COUNT);
+}
+
+// 1–3 of the caption's emoji (random pick, random order) left of the text, mirrored
+// on the right.
+function framedCaption(c) {
+  if (!c.emojis || !c.emojis.length) return c.text;
+  const pool = c.emojis.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const picks = pool.slice(0, 1 + Math.floor(Math.random() * Math.min(3, pool.length)));
+  return picks.join('') + ' ' + c.text + ' ' + picks.slice().reverse().join('');
 }
 
 function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
@@ -267,9 +321,11 @@ function nextCaption(captions, bagKey) {
     const saved = JSON.parse(localStorage.getItem(storeKey) || 'null');
     if (saved && Array.isArray(saved.bag)) { bag = saved.bag; last = saved.last || null; }
   } catch (e) {}
-  bag = bag.filter(c => captions.includes(c));
+  // The bag holds caption texts; look the caption objects up by text.
+  const byText = new Map(captions.map(c => [c.text, c]));
+  bag = bag.filter(t => byText.has(t));
   if (!bag.length) {
-    bag = captions.slice();
+    bag = captions.map(c => c.text);
     for (let i = bag.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [bag[i], bag[j]] = [bag[j], bag[i]];
@@ -277,15 +333,16 @@ function nextCaption(captions, bagKey) {
     // Don't start a new round with the caption that just ended the last one.
     if (bag.length > 1 && bag[0] === last) bag.push(bag.shift());
   }
-  const caption = bag.shift();
-  try { localStorage.setItem(storeKey, JSON.stringify({ bag, last: caption })); } catch (e) {}
-  return caption;
+  const text = bag.shift();
+  try { localStorage.setItem(storeKey, JSON.stringify({ bag, last: text })); } catch (e) {}
+  return byText.get(text);
 }
 
 // A complete overlay style: { title, font, color } — the shape drawPhotoLabel() takes.
+// The emoji framing is rolled here too, so every photo (and retake) gets a fresh mix.
 function randomCaptionStyle(caption) {
   return normalizePhotoLabel({
-    title: caption,
+    title: framedCaption(caption),
     font: randomItem(Object.keys(PHOTO_FONTS)),
     color: randomItem(PHOTO_COLORS),
   });

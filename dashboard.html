@@ -120,6 +120,7 @@
   }
   .caption-row input:focus { border-color: var(--orange); }
   .caption-row input.too-long { border-color: #E24B4A; }
+  .caption-row input.caption-emoji { flex: 0 0 88px; padding: 9px 8px; text-align: center; letter-spacing: 1px; }
   .caption-del {
     width: 34px; height: 34px; flex-shrink: 0; border-radius: 50%; cursor: pointer;
     border: 1.5px solid var(--border); background: var(--card); color: var(--muted); font-size: 0.85rem;
@@ -207,7 +208,7 @@
 
       <div class="photo-label" id="photoLabelSection" style="display:none;">
         <p class="label-heading">Random captions on photos</p>
-        <p class="label-hint">Each photo saved to your Drive gets one of these captions, in a random font and colour. Players' own phones keep the plain photo. Leave the list empty for no captions.</p>
+        <p class="label-hint">Each photo saved to your Drive gets one of these captions, framed by 1–3 of its emoji (mirrored on both sides), in a random font and colour. Players' own phones keep the plain photo. Leave the list empty for no captions.</p>
         <input type="text" id="captionTheme" maxlength="100" placeholder="Theme, e.g. Sec 3 camp at Pulau Ubin" autocomplete="off">
         <button type="button" id="captionGenerateBtn">✨ Suggest 10 captions</button>
         <ul class="caption-list" id="captionList"></ul>
@@ -616,20 +617,39 @@ function initDriveCard(isGuest) {
 }
 
 // ── Random captions drawn onto Drive photos (see photo-label.js) ──
-let captionRows = [];        // the editable list, as typed
+// The editable list, as typed: [{ text, emojis }] where emojis is the emoji box's text.
+let captionRows = [];
 let savedCaptionsJson = '';
 let sampleStyle = normalizePhotoLabel(null);
 
-const captionTooLong = c => captionLength(c.trim()) > CAPTION_MAX;
+const rowFromCaption = c => ({ text: c.text, emojis: c.emojis.join('') });
+const rowsAsCaptions = () => normalizeCaptions(captionRows);
+
+// What's wrong with a row, if anything → { field: 'text' | 'emojis', msg }.
+// A completely blank row is just ignored.
+function captionRowProblem(r) {
+  const text = r.text.trim();
+  const emojiBox = r.emojis.replace(/\s+/g, '');
+  if (!text && !emojiBox) return null;
+  if (!text) return { field: 'text', msg: 'Add caption text' };
+  if (splitEmojis(text).emojis.length) return { field: 'text', msg: 'Put emoji in the box on the left, not in the caption' };
+  if (captionLength(text) > CAPTION_MAX) return { field: 'text', msg: 'Keep captions to ' + CAPTION_MAX + ' characters' };
+  const parsed = splitEmojis(emojiBox);
+  if (parsed.text) return { field: 'emojis', msg: 'Only emoji go in this box' };
+  if (!parsed.emojis.length) return { field: 'emojis', msg: 'Add at least one emoji' };
+  if (new Set(parsed.emojis).size > CAPTION_EMOJI_MAX) return { field: 'emojis', msg: 'Up to ' + CAPTION_EMOJI_MAX + ' emoji' };
+  return null;
+}
+
 function captionsState() {
   return JSON.stringify({
     theme: document.getElementById('captionTheme').value.trim(),
-    captions: normalizeCaptions(captionRows),
+    captions: rowsAsCaptions(),
   });
 }
 function updateCaptionSaveBtn() {
   document.getElementById('labelSaveBtn').disabled =
-    captionsState() === savedCaptionsJson || captionRows.some(captionTooLong);
+    captionsState() === savedCaptionsJson || captionRows.some(captionRowProblem);
 }
 
 async function renderLabelPreview() {
@@ -642,7 +662,7 @@ async function renderLabelPreview() {
 }
 
 function newCaptionSample() {
-  const list = normalizeCaptions(captionRows);
+  const list = rowsAsCaptions();
   sampleStyle = list.length ? randomCaptionStyle(randomItem(list)) : normalizePhotoLabel(null);
   renderLabelPreview();
 }
@@ -653,29 +673,40 @@ function renderCaptionList() {
   if (!captionRows.length) {
     ul.innerHTML = '<li class="caption-empty">No captions yet — describe a theme and tap Suggest, or add your own.</li>';
   }
-  captionRows.forEach((text, k) => {
+  captionRows.forEach((row, k) => {
     const li = document.createElement('li');
     li.className = 'caption-row';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.maxLength = 40;
-    input.value = text;
-    input.setAttribute('aria-label', 'Caption ' + (k + 1));
-    input.classList.toggle('too-long', captionTooLong(text));
-    input.addEventListener('input', () => {
-      captionRows[k] = input.value;
-      const tooLong = captionTooLong(input.value);
-      input.classList.toggle('too-long', tooLong);
-      input.title = tooLong ? 'Keep captions to ' + CAPTION_MAX + ' characters' : '';
-      updateCaptionSaveBtn();
-    });
+    const emojiInput = document.createElement('input');
+    emojiInput.type = 'text';
+    emojiInput.className = 'caption-emoji';
+    emojiInput.maxLength = 60;
+    emojiInput.value = row.emojis;
+    emojiInput.placeholder = '🌴🚲⛺';
+    emojiInput.setAttribute('aria-label', 'Emoji for caption ' + (k + 1));
+    const textInput = document.createElement('input');
+    textInput.type = 'text';
+    textInput.maxLength = 40;
+    textInput.value = row.text;
+    textInput.setAttribute('aria-label', 'Caption ' + (k + 1));
+    const showProblem = () => {
+      const problem = captionRowProblem(captionRows[k]);
+      const inEmoji = !!problem && problem.field === 'emojis';
+      const inText = !!problem && problem.field === 'text';
+      emojiInput.classList.toggle('too-long', inEmoji);
+      textInput.classList.toggle('too-long', inText);
+      emojiInput.title = inEmoji ? problem.msg : '';
+      textInput.title = inText ? problem.msg : '';
+    };
+    emojiInput.addEventListener('input', () => { captionRows[k].emojis = emojiInput.value; showProblem(); updateCaptionSaveBtn(); });
+    textInput.addEventListener('input', () => { captionRows[k].text = textInput.value; showProblem(); updateCaptionSaveBtn(); });
+    showProblem();
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'caption-del';
     del.textContent = '✕';
     del.setAttribute('aria-label', 'Remove caption ' + (k + 1));
     del.addEventListener('click', () => { captionRows.splice(k, 1); renderCaptionList(); newCaptionSample(); });
-    li.append(input, del);
+    li.append(emojiInput, textInput, del);
     ul.appendChild(li);
   });
   document.getElementById('captionAddBtn').disabled = captionRows.length >= CAPTIONS_MAX_COUNT;
@@ -686,14 +717,14 @@ async function suggestCaptions() {
   const themeInput = document.getElementById('captionTheme');
   const theme = themeInput.value.trim();
   if (!theme) { showToast('Describe a theme first'); themeInput.focus(); return; }
-  if (normalizeCaptions(captionRows).length && !confirm('Replace your current captions with new suggestions?')) return;
+  if (rowsAsCaptions().length && !confirm('Replace your current captions with new suggestions?')) return;
   const btn = document.getElementById('captionGenerateBtn');
   btn.disabled = true;
   btn.textContent = 'Thinking…';
   try {
     const { data, error } = await sb.functions.invoke('generate-captions', { body: { theme } });
     if (error || !data || !Array.isArray(data.captions) || !data.captions.length) throw error || new Error('no captions');
-    captionRows = normalizeCaptions(data.captions);
+    captionRows = normalizeCaptions(data.captions).map(rowFromCaption);
     renderCaptionList();
     newCaptionSample();
     showToast('✓ ' + captionRows.length + ' suggestions — edit or remove any, then Save');
@@ -712,15 +743,15 @@ async function initPhotoLabel(userId) {
   document.getElementById('captionShuffleBtn').addEventListener('click', newCaptionSample);
   document.getElementById('captionAddBtn').addEventListener('click', () => {
     if (captionRows.length >= CAPTIONS_MAX_COUNT) return;
-    captionRows.push('');
+    captionRows.push({ text: '', emojis: '' });
     renderCaptionList();
     const inputs = document.querySelectorAll('#captionList input');
-    inputs[inputs.length - 1].focus();
+    inputs[inputs.length - 1].focus(); // the new row's caption text
   });
 
   document.getElementById('labelSaveBtn').addEventListener('click', async () => {
     const btn = document.getElementById('labelSaveBtn');
-    const captions = normalizeCaptions(captionRows);
+    const captions = rowsAsCaptions();
     const theme = document.getElementById('captionTheme').value.trim().slice(0, 100);
     btn.disabled = true;
     btn.textContent = 'Saving…';
@@ -729,7 +760,7 @@ async function initPhotoLabel(userId) {
         user_id: userId, caption_theme: theme, captions, updated_at: new Date().toISOString(),
       }, { onConflict: 'user_id' });
       if (error) throw error;
-      captionRows = captions.slice(); // drop blanks/duplicates the host left behind
+      captionRows = captions.map(rowFromCaption); // drop blanks/duplicates the host left behind
       savedCaptionsJson = captionsState();
       renderCaptionList();
       showToast(captions.length ? '✓ ' + captions.length + ' captions saved' : '✓ Captions removed');
@@ -747,7 +778,7 @@ async function initPhotoLabel(userId) {
     if (error) throw error;
     if (data) {
       document.getElementById('captionTheme').value = data.caption_theme || '';
-      captionRows = normalizeCaptions(data.captions);
+      captionRows = normalizeCaptions(data.captions).map(rowFromCaption);
     }
   } catch (e) {
     console.error('Loading captions failed:', e);
