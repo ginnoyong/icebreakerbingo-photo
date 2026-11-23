@@ -140,7 +140,6 @@
 /* ── Header badges/buttons ── */
 .count-badge { font-family: 'Syne', sans-serif; font-size: 0.78rem; font-weight: 700; color: var(--muted); }
 .count-badge span { color: var(--orange); }
-.top-btns { display: flex; gap: 6px; }
 
 /* ── Fireworks ── */
 #fireworks { position: fixed; inset: 0; pointer-events: none; z-index: 9999; width: 100%; height: 100%; }
@@ -215,10 +214,6 @@
     <h1><img src="logo.svg" alt="Icebreaker Bingo logo" width="42" height="42" style="vertical-align:middle;margin-right:8px;"> Icebreaker Bin<span class="title-g">g</span>o <span class="edition-badge">📸 Photo</span></h1>
     <div class="header-sub">
       <div class="count-badge">Matched: <span id="count">0</span>/<span id="totalCount">24</span></div>
-      <div class="top-btns">
-        <button class="btn btn-ghost" onclick="resetMarks()">Clear</button>
-        <button class="btn btn-primary" onclick="reshuffleBoard()">Reshuffle ↺</button>
-      </div>
     </div>
   </div>
 
@@ -341,9 +336,6 @@ function saveProgress() {
 function loadProgress() {
   try { return JSON.parse(localStorage.getItem(PROGRESS_PREFIX + boardKey) || 'null'); } catch (e) { return null; }
 }
-function clearProgress(key) {
-  try { localStorage.removeItem(PROGRESS_PREFIX + key); } catch (e) {}
-}
 
 // ── Photo storage on this phone (IndexedDB; in-memory if IndexedDB is unavailable) ──
 // Record shape: { phrase, name, view: Blob (≤1600px), thumb: Blob (≤360px), takenAt }
@@ -380,11 +372,6 @@ const PhotoStore = (() => {
       mem.delete(key);
       const d = await db();
       if (d) { try { await run(d, 'readwrite', s => s.delete(key)); } catch (e) {} }
-    },
-    async deleteBoard(prefix) {
-      [...mem.keys()].forEach(k => { if (k.startsWith(prefix)) mem.delete(k); });
-      const d = await db();
-      if (d) { try { await run(d, 'readwrite', s => s.delete(range(prefix))); } catch (e) {} }
     },
     // → Map(key → record) for every photo of one board
     async getBoard(prefix) {
@@ -521,25 +508,6 @@ async function buildBoard() {
 }
 
 function checkedCount() { return Math.max(0, marks.filter(Boolean).length - 1); }
-
-async function reshuffleBoard() {
-  const n = checkedCount();
-  if (n > 0 && !(await askConfirm(
-    'Reshuffle your board?',
-    `You'll get a new layout. Your ${n} checked square${n === 1 ? '' : 's'} and ${n === 1 ? 'its photo' : 'their photos'} on this phone will be deleted.` +
-      (anyPhotoInDrive() ? " Photos already sent to your host's Google Drive stay there." : ''),
-    'Reshuffle'))) return;
-  const oldKey = boardKey;
-  await PhotoStore.deleteBoard(oldKey + '|');
-  clearProgress(oldKey);
-  try { localStorage.removeItem('bingo-photo:captionbag:' + oldKey); } catch (e) {}
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set('seed', Math.floor(Math.random() * 9999999));
-    history.replaceState({}, '', url);
-  } catch(e) {}
-  await buildBoard();
-}
 
 function fitCellText() {
   const cells = document.querySelectorAll('.cell');
@@ -862,10 +830,6 @@ function updatePhotoStatus(i) {
   if (viewerCell === i) renderViewerStatus();
 }
 
-function anyPhotoInDrive() {
-  return Object.values(photoRecs).some(r => r.uploadState === 'done');
-}
-
 // ── Photo viewer ──
 let viewerCell = null;
 let viewerUrl = null;
@@ -1008,22 +972,6 @@ function updateCharCount() {
   const el = document.getElementById('charCount');
   el.textContent = v + '/15';
   el.className = 'char-count' + (v >= 15 ? ' full' : '');
-}
-
-async function resetMarks() {
-  const n = checkedCount();
-  if (n === 0) return;
-  if (!(await askConfirm(
-    'Clear your board?',
-    `This unchecks all ${n} square${n === 1 ? '' : 's'} and deletes ${n === 1 ? 'its photo' : 'their photos'} from this phone.` +
-      (anyPhotoInDrive() ? " Photos already sent to your host's Google Drive stay there." : ''),
-    'Clear'))) return;
-  await PhotoStore.deleteBoard(boardKey + '|');
-  clearAllPhotos();
-  marks = new Array(total).fill(false);
-  notes = new Array(total).fill(""); marks[freeIndex] = true;
-  saveProgress();
-  renderGrid(); updateCount(); checkWin(false);
 }
 
 function updateCount() {
